@@ -178,7 +178,7 @@ interface AppContextType {
   resetMediaAdjustments: (id: string) => void;
   saveMediaVersion: (id: string, note?: string) => void;
   restoreMediaVersion: (id: string, versionId: string) => void;
-  addMediaItem: (item: MediaItem) => void;
+  addMediaItem: (item: MediaItem) => Promise<MediaItem | null>;
   deleteMediaItem: (id: string) => void;
 
   pages: BuilderPage[];
@@ -1060,29 +1060,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notify(`تمت استعادة الإصدار: ${version.label}`);
   };
 
-  const addMediaItem = async (item: MediaItem) => {
+  const addMediaItem = async (item: MediaItem): Promise<MediaItem | null> => {
     let persistedItem = { ...item };
     if (persistedItem.url?.startsWith('blob:')) {
       notify('لا يمكن حفظ رابط صورة مؤقت؛ ارفع الملف من جديد', 'warning');
-      return;
+      return null;
     }
     if (persistedItem.url?.startsWith('data:image/')) {
       try {
-        const blob = await (await fetch(persistedItem.url)).blob();
-        const extension = blob.type.split('/')[1] || 'png';
-        const uploaded = await apiClient.uploadMedia(new File([blob], `${persistedItem.name || 'image'}.${extension}`, { type: blob.type }));
+        const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,([a-z\d+/=]+)$/i.exec(persistedItem.url);
+        if (!match) throw new Error('Unsupported image data URL');
+        const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+        const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1];
+        const name = (persistedItem.name || 'image').replace(/\.[^.]+$/, '');
+        const uploaded = await apiClient.uploadMedia(new File([bytes], `${name}.${extension}`, { type: match[1] }));
         const publicUrl = String(uploaded.publicUrl);
         persistedItem = {
           ...persistedItem,
           id: String(uploaded.id),
           url: publicUrl,
           originalUrl: publicUrl,
-          type: String(uploaded.mimeType ?? blob.type),
+          type: String(uploaded.mimeType ?? match[1]),
         };
       } catch (err) {
         console.warn('Media upload failed:', err);
         notify('تعذر رفع الصورة إلى التخزين الدائم؛ لم تتم إضافتها', 'warning');
-        return;
+        return null;
       }
     }
     const updatedMedia = [persistedItem, ...mediaList.filter(m => m.id !== persistedItem.id)];
@@ -1090,6 +1093,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedMediaId(persistedItem.id);
     notify('تم رفع الصورة وإضافتها إلى مكتبة الوسائط الدائمة بنجاح');
     setDraftStatus('unsaved');
+    return persistedItem;
   };
 
   const deleteMediaItem = async (id: string) => {

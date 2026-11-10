@@ -1708,9 +1708,10 @@ export const VisualPageBuilder: React.FC = () => {
                                     },
                                     versions: []
                                   };
-                                  await addMediaItem(newItem);
+                                  const savedMedia = await addMediaItem(newItem);
+                                  if (!savedMedia) return;
                                   updateBuilderElement(selectedElement.id, {
-                                    content: { ...selectedElement.content, imageUrl: optUrl }
+                                    content: { ...selectedElement.content, imageUrl: savedMedia.url }
                                   });
                                   notify('تم رفع الصورة وإدراجها في العنصر بنجاح!');
                                 } catch {

@@ -251,11 +251,10 @@ export const ContentStudio: React.FC = () => {
           }
         ]
       };
-      addMediaItem(newItem);
-      notify('تم رفع الصورة وتحسين حجمها لتوفير مساحة سحابية فائقة السرعة!');
+      await addMediaItem(newItem);
     } catch {
       const reader = new FileReader();
-      reader.onload = (event) => {
+      reader.onload = async (event) => {
         const url = event.target?.result as string;
         const newItem: MediaItem = {
           id: 'med_' + Date.now(),
@@ -284,7 +283,7 @@ export const ContentStudio: React.FC = () => {
           },
           versions: []
         };
-        addMediaItem(newItem);
+        await addMediaItem(newItem);
       };
       reader.readAsDataURL(file);
     }
@@ -1276,8 +1275,9 @@ export const ContentStudio: React.FC = () => {
                                   },
                                   versions: []
                                 };
-                                await addMediaItem(newMedia);
-                                updateArticle(currentArticle.id, { coverImage: optimizedUrl });
+                                const savedMedia = await addMediaItem(newMedia);
+                                if (!savedMedia) return;
+                                updateArticle(currentArticle.id, { coverImage: savedMedia.url });
                                 notify('تم رفع وتعيين صورة الغلاف بنجاح!');
                               } catch {
                                 notify('تعذر رفع الصورة', 'warning');
