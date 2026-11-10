@@ -23,5 +23,17 @@ export const createDraftSaveQueue = <Snapshot, Published>(
       tail = operation.then(() => undefined, () => undefined);
       return operation;
     },
+    importSnapshot(
+      snapshot: Snapshot,
+      importer: (snapshot: Snapshot, expectedVersion: number) => Promise<{ snapshot: Snapshot; draftVersion: number }>,
+    ) {
+      const operation = tail.then(async () => {
+        const imported = await importer(snapshot, version);
+        version = imported.draftVersion;
+        return imported;
+      });
+      tail = operation.then(() => undefined, () => undefined);
+      return operation;
+    },
   };
 };

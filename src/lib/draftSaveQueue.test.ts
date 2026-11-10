@@ -42,3 +42,27 @@ test('a failed save leaves its version unchanged and does not block the next sav
   assert.deepEqual(versions, [4, 4]);
   assert.equal(queue.version, 5);
 });
+
+test('backup import waits for an in-flight save and advances only after confirmed import', async () => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const calls: number[] = [];
+  const queue = createDraftSaveQueue({
+    saveDraft: async (snapshot: { name: string }, version: number) => {
+      await pending;
+      return { snapshot, draftVersion: version + 1 };
+    },
+    publish: async () => ({}),
+  }, 5);
+  const save = queue.save({ name: 'before' });
+  const imported = queue.importSnapshot({ name: 'backup' }, async (snapshot, version) => {
+    calls.push(version);
+    return { snapshot, draftVersion: version + 1 };
+  });
+  release();
+  await Promise.all([save, imported]);
+  assert.deepEqual(calls, [6]);
+  assert.equal(queue.version, 7);
+  await assert.rejects(() => queue.importSnapshot({ name: 'bad' }, async () => { throw new Error('failed import'); }), /failed import/);
+  assert.equal(queue.version, 7);
+});

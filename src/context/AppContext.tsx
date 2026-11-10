@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
-import { apiClient, ApiConflictError, ApiSessionExpiredError } from '../lib/apiClient';
+import { apiClient, ApiConflictError, ApiError, ApiSessionExpiredError } from '../lib/apiClient';
+import { parseBackupForImport } from '../lib/backupImport';
 import { createPortfolioSnapshot, type PortfolioSnapshotV1 } from '../lib/portfolioSnapshot';
 import { persistMediaDeletion } from '../lib/mediaDeletion';
 import { getLoginFailureMessage } from '../lib/loginFailure';
@@ -752,6 +753,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
   const [draftVersion, setDraftVersion] = useState(0);
   const draftSaveQueueRef = useRef(createDraftSaveQueue(apiClient));
+  const isImportingBackupRef = useRef(false);
   const lastServerSnapshotRef = useRef<PortfolioSnapshotV1 | null>(null);
   const [isCloudQuotaExhausted, setIsCloudQuotaExhausted] = useState(false);
 
@@ -1498,6 +1500,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (draftStatus !== 'unsaved') return;
 
     const autoSyncTimer = setTimeout(async () => {
+      if (isImportingBackupRef.current) return;
       try {
         console.log('[Auto-Sync] Debounced cloud synchronization triggered...');
         await savePortfolioToServer({
@@ -1609,35 +1612,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const importBackup = async (jsonData: string): Promise<boolean> => {
+    isImportingBackupRef.current = true;
+    const revision = draftRevisionRef.current;
     try {
-      const parsed = JSON.parse(jsonData);
-      const baseline = currentSnapshot();
-      const snapshot = createPortfolioSnapshot({
-        profile: parsed.profile ?? baseline.profile,
-        metrics: parsed.metrics ?? baseline.metrics,
-        services: parsed.services ?? baseline.services,
-        solutions: parsed.solutions ?? baseline.solutions,
-        projects: parsed.projects ?? baseline.projects,
-        articles: parsed.articles ?? baseline.articles,
-        mediaList: parsed.mediaList ?? baseline.mediaList,
-        pages: parsed.pages ?? baseline.pages,
-        showcaseApps: parsed.showcaseApps ?? baseline.showcaseApps,
-        showcaseBarConfig: parsed.showcaseBarConfig ?? baseline.showcaseBarConfig,
-        cvResumeData: parsed.cvResumeData ?? baseline.cvResumeData,
-        heroConfig: parsed.heroConfig ?? baseline.heroConfig,
-        brandVideoUrl: parsed.brandVideoUrl ?? baseline.brandVideoUrl,
-      }, parsed.savedAt);
-      const imported = await apiClient.importContent(snapshot, draftSaveQueueRef.current.version);
-      applySnapshot(imported.snapshot);
+      const { snapshot } = parseBackupForImport(jsonData);
+      const imported = await draftSaveQueueRef.current.importSnapshot(snapshot, apiClient.importContent);
       setDraftVersion(imported.draftVersion);
-      draftSaveQueueRef.current.setVersion(imported.draftVersion);
-      setDraftStatus('saved');
-      notify('تم استيراد النسخة إلى مسودة الخادم بنجاح');
+      lastServerSnapshotRef.current = imported.snapshot;
+      if (revision === draftRevisionRef.current) {
+        applySnapshot(imported.snapshot);
+        setDraftStatus('saved');
+        notify('تم استيراد النسخة إلى مسودة الخادم بنجاح');
+      } else {
+        setDraftStatus('unsaved');
+        notify('حُفظت النسخة المستوردة، وتوجد تعديلات أحدث في هذا التبويب لم تُحفظ بعد', 'warning');
+      }
       return true;
     } catch (error) {
-      console.error('Backup import failed:', error);
-      notify('فشل الاستيراد أو الحفظ على الخادم؛ لم تُعرض رسالة نجاح وهمية', 'warning');
+      if (error instanceof ApiConflictError) {
+        notify(`تعارض مع مسودة أحدث على الخادم (الإصدار ${error.currentVersion})؛ لم تُستبدل المسودة`, 'warning');
+      } else if (error instanceof ApiSessionExpiredError) {
+        setIsAuthenticated(false);
+        notify('انتهت جلسة الإدارة؛ سجّل الدخول مجددًا قبل الاستيراد', 'warning');
+      } else if (error instanceof ApiError && error.code === 'INVALID_EMBEDDED_IMAGE') {
+        notify('تحتوي النسخة على صورة مضمّنة غير صالحة أو رابط مؤقت؛ لم تُستبدل المسودة', 'warning');
+      } else if (error instanceof ApiError) {
+        notify(error.status >= 500 ? 'تعذر تخزين الصور أو حفظها في قاعدة البيانات؛ لم تُستبدل المسودة' : `رفض الخادم النسخة (${error.code})؛ لم تُستبدل المسودة`, 'warning');
+      } else {
+        notify(error instanceof Error ? error.message : 'تعذر قراءة ملف النسخة الاحتياطية', 'warning');
+      }
       return false;
+    } finally {
+      isImportingBackupRef.current = false;
     }
   };
 

@@ -1,4 +1,5 @@
 import type { PortfolioSnapshotV1 } from './schema.js';
+import type { MediaRecord } from '../media/repository.js';
 
 export interface ContentDocument {
   id: number;
@@ -29,6 +30,7 @@ export interface AuditEntry {
 
 export interface ContentTransaction {
   getDocumentForUpdate(): Promise<ContentDocument>;
+  insertMedia(record: MediaRecord): Promise<void>;
   updateDraft(snapshot: PortfolioSnapshotV1, version: number, adminId: number): Promise<void>;
   updatePublished(
     snapshot: PortfolioSnapshotV1,
