@@ -212,7 +212,7 @@ interface AppContextType {
   saveDraft: () => Promise<void>;
   restoreDraft: () => boolean;
   publishChanges: () => Promise<void>;
-  resetToDefaults: () => void;
+  resetToDefaults: () => Promise<void>;
   exportBackup: () => void;
   importBackup: (jsonData: string) => Promise<boolean>;
   previewLegacyMigration: () => string[];
@@ -220,6 +220,7 @@ interface AppContextType {
   clearLegacyData: (secondDeviceVerified: boolean) => boolean;
   savePortfolioToServer: (options?: {
     profileOverride?: ProfileData;
+    metricsOverride?: MetricItem[];
     mediaOverride?: MediaItem[];
     pagesOverride?: BuilderPage[];
     projectsOverride?: ProjectItem[];
@@ -227,6 +228,8 @@ interface AppContextType {
     servicesOverride?: ServiceItem[];
     solutionsOverride?: IntegratedSolutionItem[];
     showcaseAppsOverride?: ShowcaseAppItem[];
+    showcaseBarConfigOverride?: ShowcaseBarConfig;
+    cvResumeDataOverride?: CvResumeData;
     heroConfigOverride?: HeroConfig;
     isPublished?: boolean;
   }) => Promise<void>;
@@ -1221,6 +1224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const savePortfolioToServer = async (options: {
     profileOverride?: ProfileData;
+    metricsOverride?: MetricItem[];
     mediaOverride?: MediaItem[];
     pagesOverride?: BuilderPage[];
     projectsOverride?: ProjectItem[];
@@ -1228,12 +1232,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     servicesOverride?: ServiceItem[];
     solutionsOverride?: IntegratedSolutionItem[];
     showcaseAppsOverride?: ShowcaseAppItem[];
+    showcaseBarConfigOverride?: ShowcaseBarConfig;
+    cvResumeDataOverride?: CvResumeData;
     heroConfigOverride?: HeroConfig;
     isPublished?: boolean;
   } = {}): Promise<void> => {
     const snapshot = createPortfolioSnapshot({
       profile: options.profileOverride ?? profile,
-      metrics,
+      metrics: options.metricsOverride ?? metrics,
       services: options.servicesOverride ?? services,
       solutions: options.solutionsOverride ?? solutions,
       projects: options.projectsOverride ?? projects,
@@ -1241,8 +1247,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mediaList: options.mediaOverride ?? mediaList,
       pages: options.pagesOverride ?? pages,
       showcaseApps: options.showcaseAppsOverride ?? showcaseApps,
-      showcaseBarConfig,
-      cvResumeData,
+      showcaseBarConfig: options.showcaseBarConfigOverride ?? showcaseBarConfig,
+      cvResumeData: options.cvResumeDataOverride ?? cvResumeData,
       heroConfig: options.heroConfigOverride ?? heroConfig,
       brandVideoUrl,
     });
@@ -1510,7 +1516,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearTimeout(autoSyncTimer);
   }, [draftStatus, projects, articles, profile, heroConfig, services, solutions, showcaseApps, pages, mediaList, metrics, showcaseBarConfig, cvResumeData, brandVideoUrl]);
 
-  const resetToDefaults = () => {
+  const resetToDefaults = async (): Promise<void> => {
     setProfile(initialProfile);
     setMetrics(initialMetrics);
     setServices(initialServices);
@@ -1522,8 +1528,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setShowcaseApps(initialShowcaseApps);
     setShowcaseBarConfig(initialShowcaseBarConfig);
     setCvResumeData(initialCvResumeData);
-    setDraftStatus('saved');
-    notify('تمت استعادة جميع البيانات والتهيئات الافتراضية بنجاح');
+    setDraftStatus('unsaved');
+    const revision = draftRevisionRef.current;
+    try {
+      await savePortfolioToServer({
+        profileOverride: initialProfile,
+        metricsOverride: initialMetrics,
+        servicesOverride: initialServices,
+        solutionsOverride: initialSolutions,
+        projectsOverride: initialProjects,
+        articlesOverride: initialArticles,
+        mediaOverride: initialMedia,
+        pagesOverride: initialPages,
+        showcaseAppsOverride: initialShowcaseApps,
+        showcaseBarConfigOverride: initialShowcaseBarConfig,
+        cvResumeDataOverride: initialCvResumeData,
+      });
+      if (revision === draftRevisionRef.current) {
+        notify('تمت استعادة القيم الافتراضية وحفظها في مسودة الخادم', 'success');
+      } else {
+        notify('حُفظت القيم الافتراضية، وتوجد تعديلات أحدث لم تُحفظ بعد', 'warning');
+      }
+    } catch (error) {
+      setDraftStatus('unsaved');
+      if (error instanceof ApiConflictError) {
+        notify(`توجد مسودة أحدث على الخادم (الإصدار ${error.currentVersion})؛ بقيت القيم الافتراضية غير محفوظة`, 'warning');
+      } else if (error instanceof ApiSessionExpiredError) {
+        setIsAuthenticated(false);
+        notify('انتهت جلسة الإدارة؛ بقيت القيم الافتراضية غير محفوظة', 'warning');
+      } else {
+        notify('تعذر حفظ القيم الافتراضية على الخادم؛ بقيت التغييرات غير محفوظة', 'warning');
+      }
+    }
   };
 
   const exportBackup = () => {

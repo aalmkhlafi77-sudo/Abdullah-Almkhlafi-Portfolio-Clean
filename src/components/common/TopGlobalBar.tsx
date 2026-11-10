@@ -400,7 +400,7 @@ export const TopGlobalBar: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  resetToDefaults();
+                  void resetToDefaults();
                   setShowResetModal(false);
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-[#C5A059] text-black hover:bg-[#D4AF37]"
