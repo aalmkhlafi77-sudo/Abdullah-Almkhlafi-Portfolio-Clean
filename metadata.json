@@ -1,0 +1,7 @@
+{
+  "name": "منصة عبدالله المخلافي | Abdullah Almkhlafi Portfolio & Studio",
+  "description": "منصة شخصية ذكية واستوديو رقمي فاخر يجمع بين الموقع التعريفي الراقي، معرض الأعمال، منشئ الصفحات المرئي، ومحرر المحتوى والوسائط.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
