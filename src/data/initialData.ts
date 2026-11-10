@@ -34,13 +34,13 @@ export const initialProfile: ProfileData = {
   availableForHire: true,
   socials: {
     github: 'https://github.com/aalmkhlafi77-sudo',
-    linkedin: 'https://www.facebook.com/bdallhhzaalmkhlafy',
-    x: 'https://www.facebook.com/bdallhhzaalmkhlafy',
+    linkedin: '',
+    x: '',
     email: 'mailto:a.almkhlafi77@gmail.com',
     facebook: 'https://www.facebook.com/bdallhhzaalmkhlafy',
-    youtube: 'https://www.facebook.com/bdallhhzaalmkhlafy',
-    tiktok: 'https://www.facebook.com/bdallhhzaalmkhlafy',
-    snapchat: 'https://www.facebook.com/bdallhhzaalmkhlafy'
+    youtube: '',
+    tiktok: '',
+    snapchat: ''
   }
 };
 

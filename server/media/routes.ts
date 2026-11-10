@@ -5,8 +5,9 @@ import { Router } from 'express';
 import multer from 'multer';
 
 import type { PortfolioSnapshotV1 } from '../content/schema.js';
+import { ContentNotPublishedError } from '../content/service.js';
 import type { MediaRecord, MediaRepository } from './repository.js';
-import { detectImageType, MAX_IMAGE_BYTES, removeStoredImage, storeImage } from './storage.js';
+import { detectImageType, MAX_IMAGE_BYTES, removeStoredImage, resolveMediaPath, storeImage } from './storage.js';
 
 const containsExactString = (value: unknown, target: string): boolean => {
   if (value === target) return true;
@@ -33,8 +34,9 @@ export const deleteMediaAsset = async (id: string, deps: DeleteMediaDependencies
   if (isMediaReferenced(deps.draft, record.publicUrl) || isMediaReferenced(deps.published, record.publicUrl)) {
     throw new Error('Media is referenced by content');
   }
-  await removeStoredImage(deps.uploadRoot, record.storageName);
+  resolveMediaPath(deps.uploadRoot, record.storageName);
   await deps.repository.delete(id);
+  await removeStoredImage(deps.uploadRoot, record.storageName);
 };
 
 export interface MediaRouterDependencies {
@@ -53,9 +55,15 @@ export const createMediaRouter = (deps: MediaRouterDependencies): Router => {
       res.status(400).json({ error: 'IMAGE_REQUIRED' });
       return;
     }
+    let type: Awaited<ReturnType<typeof detectImageType>>;
+    try {
+      type = await detectImageType(req.file.buffer);
+    } catch {
+      res.status(400).json({ error: 'INVALID_IMAGE' });
+      return;
+    }
     let stored: Awaited<ReturnType<typeof storeImage>> | null = null;
     try {
-      const type = await detectImageType(req.file.buffer);
       stored = await storeImage(req.file.buffer, type, deps.uploadRoot);
       const record: MediaRecord = {
         id: randomUUID(),
@@ -70,7 +78,7 @@ export const createMediaRouter = (deps: MediaRouterDependencies): Router => {
       res.status(201).json(record);
     } catch {
       if (stored) await removeStoredImage(deps.uploadRoot, stored.storageName);
-      res.status(400).json({ error: 'IMAGE_UPLOAD_FAILED' });
+      res.status(500).json({ error: 'IMAGE_UPLOAD_FAILED' });
     }
   });
 
@@ -82,12 +90,19 @@ export const createMediaRouter = (deps: MediaRouterDependencies): Router => {
     try {
       const draft = (await deps.getDraft(req.admin.id)).snapshot;
       let published: PortfolioSnapshotV1 | null = null;
-      try { published = (await deps.getPublished()).snapshot; } catch {}
+      try {
+        published = (await deps.getPublished()).snapshot;
+      } catch (error) {
+        if (!(error instanceof ContentNotPublishedError)) throw error;
+      }
       await deleteMediaAsset(req.params.id, { ...deps, draft, published });
       res.status(204).end();
     } catch (error) {
       const referenced = error instanceof Error && /referenced/i.test(error.message);
-      res.status(referenced ? 409 : 404).json({ error: referenced ? 'MEDIA_IN_USE' : 'MEDIA_NOT_FOUND' });
+      const notFound = error instanceof Error && error.message === 'Media not found';
+      res.status(referenced ? 409 : notFound ? 404 : 500).json({
+        error: referenced ? 'MEDIA_IN_USE' : notFound ? 'MEDIA_NOT_FOUND' : 'INTERNAL_ERROR',
+      });
     }
   });
 

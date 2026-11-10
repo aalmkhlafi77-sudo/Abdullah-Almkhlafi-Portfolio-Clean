@@ -3,6 +3,8 @@ import { apiClient, ApiConflictError, ApiSessionExpiredError } from '../lib/apiC
 import { createPortfolioSnapshot, type PortfolioSnapshotV1 } from '../lib/portfolioSnapshot';
 import { persistMediaDeletion } from '../lib/mediaDeletion';
 import { getLoginFailureMessage } from '../lib/loginFailure';
+import { createDraftSaveQueue } from '../lib/draftSaveQueue';
+import { loadPublishedContent } from '../lib/publishedContent';
 import {
   clearLegacyPersistence,
   listLegacyDifferences,
@@ -67,6 +69,7 @@ interface AppContextType {
   profile: ProfileData;
   updateProfile: (updates: Partial<ProfileData>) => void;
   isProfileLoaded: boolean;
+  publishedContentStatus: 'loading' | 'ready' | 'unpublished' | 'unavailable';
   avatarStatus: 'loading' | 'loaded-with-image' | 'loaded-without-image';
   deleteAvatar: () => Promise<void>;
 
@@ -240,16 +243,6 @@ const AppContext = createContext<AppContextType | null>(null);
 
 const THEME_STORAGE_KEY = 'almkhlafi_theme_v2';
 
-const PUBLISHED_CACHE_KEY = 'almkhlafi_published_cache_v1';
-
-const safeSetItem = (key: string, value: string) => {
-  try {
-    localStorage.setItem(key, value);
-  } catch (e) {
-    console.warn(`Local storage write failed or quota exceeded for key: ${key}`, e);
-  }
-};
-
 export const isOldStockAvatar = (url?: string | null): boolean => {
   if (!url) return false;
   return url.includes('1507003211169-0a1dd7228f2d');
@@ -263,20 +256,17 @@ export const sanitizeProfileSocials = (prof: ProfileData): ProfileData => {
   if (!socials.facebook || socials.facebook === 'https://facebook.com/almkhlafi') {
     socials.facebook = 'https://www.facebook.com/bdallhhzaalmkhlafy';
   }
-  if (!socials.linkedin || socials.linkedin === 'https://linkedin.com/in/almkhlafi') {
-    socials.linkedin = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.x || socials.x === 'https://x.com/almkhlafi') {
-    socials.x = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.youtube || socials.youtube === 'https://youtube.com/@almkhlafi') {
-    socials.youtube = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.tiktok || socials.tiktok === 'https://tiktok.com/@almkhlafi') {
-    socials.tiktok = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.snapchat || socials.snapchat === 'https://snapchat.com/add/almkhlafi') {
-    socials.snapchat = 'https://www.facebook.com/bdallhhzaalmkhlafy';
+  const placeholderSocials = {
+    linkedin: 'https://linkedin.com/in/almkhlafi',
+    x: 'https://x.com/almkhlafi',
+    youtube: 'https://youtube.com/@almkhlafi',
+    tiktok: 'https://tiktok.com/@almkhlafi',
+    snapchat: 'https://snapchat.com/add/almkhlafi',
+  };
+  for (const platform of Object.keys(placeholderSocials) as Array<keyof typeof placeholderSocials>) {
+    if (socials[platform] === placeholderSocials[platform] || socials[platform] === socials.facebook) {
+      socials[platform] = '';
+    }
   }
   return {
     ...prof,
@@ -515,6 +505,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const draft = await apiClient.getDraft();
         applySnapshot(draft.snapshot);
         setDraftVersion(draft.draftVersion);
+        draftSaveQueueRef.current.setVersion(draft.draftVersion);
         setDraftStatus('saved');
       } catch (error) {
         console.error('Unable to load server draft after login:', error);
@@ -624,8 +615,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sanitizeProfileSocials({ ...initialProfile, avatarUrl: '' }),
   );
 
-  // Keep the image hidden until the server or the last published read cache is resolved.
+  // Keep the image hidden until the server read is resolved.
   const [isProfileLoaded, setIsProfileLoaded] = useState<boolean>(false);
+  const [publishedContentStatus, setPublishedContentStatus] = useState<'loading' | 'ready' | 'unpublished' | 'unavailable'>('loading');
 
   const avatarStatus: 'loading' | 'loaded-with-image' | 'loaded-without-image' = useMemo(() => {
     if (!isProfileLoaded) return 'loading';
@@ -749,8 +741,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDraftStatus('unsaved');
   };
 
-  const [draftStatus, setDraftStatus] = useState<'saved' | 'unsaved' | 'published'>('saved');
+  const [draftStatus, setDraftStatusState] = useState<'saved' | 'unsaved' | 'published'>('saved');
+  const draftRevisionRef = useRef(0);
+  const setDraftStatus = (status: 'saved' | 'unsaved' | 'published') => {
+    if (status === 'unsaved') draftRevisionRef.current += 1;
+    setDraftStatusState(status);
+  };
   const [draftVersion, setDraftVersion] = useState(0);
+  const draftSaveQueueRef = useRef(createDraftSaveQueue(apiClient));
   const lastServerSnapshotRef = useRef<PortfolioSnapshotV1 | null>(null);
   const [isCloudQuotaExhausted, setIsCloudQuotaExhausted] = useState(false);
 
@@ -796,19 +794,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     let cancelled = false;
     const initializeFromServer = async () => {
-      try {
-        const published = await apiClient.publicContent();
-        if (!cancelled) {
-          applySnapshot(published.snapshot);
-          safeSetItem(PUBLISHED_CACHE_KEY, JSON.stringify(published.snapshot));
-        }
-      } catch {
-        try {
-          const cached = localStorage.getItem(PUBLISHED_CACHE_KEY);
-          if (cached && !cancelled) applySnapshot(JSON.parse(cached));
-        } catch {}
-      } finally {
-        if (!cancelled) setIsProfileLoaded(true);
+      const published = await loadPublishedContent(() => apiClient.publicContent());
+      if (!cancelled) {
+        if (published.snapshot) applySnapshot(published.snapshot);
+        setPublishedContentStatus(published.status);
+        setIsProfileLoaded(true);
       }
 
       try {
@@ -820,6 +810,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!cancelled) {
           applySnapshot(draft.snapshot);
           setDraftVersion(draft.draftVersion);
+          draftSaveQueueRef.current.setVersion(draft.draftVersion);
           setDraftStatus('saved');
         }
       } catch (error) {
@@ -1256,16 +1247,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       brandVideoUrl,
     });
 
-    const saved = await apiClient.saveDraft(snapshot, draftVersion);
+    const revision = draftRevisionRef.current;
+    const { saved, published } = await draftSaveQueueRef.current.save(snapshot, options.isPublished);
     lastServerSnapshotRef.current = saved.snapshot;
     setDraftVersion(saved.draftVersion);
-    setDraftStatus('saved');
+    if (revision === draftRevisionRef.current) setDraftStatus('saved');
 
-    if (options.isPublished) {
-      const published = await apiClient.publish(saved.draftVersion);
+    if (published) {
       lastServerSnapshotRef.current = published.snapshot;
-      setDraftStatus('published');
-      safeSetItem(PUBLISHED_CACHE_KEY, JSON.stringify(published.snapshot));
+      if (revision === draftRevisionRef.current) setDraftStatus('published');
     }
   };
 
@@ -1433,11 +1423,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Draft & Publish
   const saveDraft = async (): Promise<void> => {
     setDraftStatus('unsaved');
+    const revision = draftRevisionRef.current;
     try {
       await savePortfolioToServer();
       const now = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastSavedTime(now);
-      notify('تم حفظ المسودة نهائياً في قاعدة بيانات الموقع ✓', 'success');
+      if (revision === draftRevisionRef.current) {
+        notify('تم حفظ المسودة نهائياً في قاعدة بيانات الموقع ✓', 'success');
+      } else {
+        notify('حُفظت نسخة من المسودة، وتوجد تعديلات أحدث لم تُحفظ بعد', 'warning');
+      }
     } catch (error) {
       setDraftStatus('unsaved');
       if (error instanceof ApiConflictError) {
@@ -1464,12 +1459,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const publishChanges = async (): Promise<void> => {
     setDraftStatus('unsaved');
+    const revision = draftRevisionRef.current;
     try {
       await savePortfolioToServer({ isPublished: true });
       const now = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastSavedTime(now);
-      notify('تم نشر التغييرات من قاعدة البيانات وظهورها لجميع الأجهزة 🚀', 'success');
+      if (revision === draftRevisionRef.current) {
+        notify('تم نشر التغييرات من قاعدة البيانات وظهورها لجميع الأجهزة 🚀', 'success');
+      } else {
+        notify('نُشرت النسخة السابقة، وتوجد تعديلات أحدث لم تُنشر بعد', 'warning');
+      }
     } catch (error) {
+      setDraftVersion(draftSaveQueueRef.current.version);
       setDraftStatus('unsaved');
       if (error instanceof ApiConflictError) {
         notify(`تعارض مع مسودة أحدث على الخادم (الإصدار ${error.currentVersion})؛ لم يتم النشر`, 'warning');
@@ -1500,7 +1501,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           showcaseAppsOverride: showcaseApps,
           heroConfigOverride: heroConfig
         });
-        setDraftStatus('saved');
         console.log('[Auto-Sync] Background cloud sync completed successfully.');
       } catch (err) {
         console.warn('[Auto-Sync] Background sync deferred:', err);
@@ -1587,9 +1587,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         heroConfig: parsed.heroConfig ?? baseline.heroConfig,
         brandVideoUrl: parsed.brandVideoUrl ?? baseline.brandVideoUrl,
       }, parsed.savedAt);
-      const imported = await apiClient.importContent(snapshot, draftVersion);
+      const imported = await apiClient.importContent(snapshot, draftSaveQueueRef.current.version);
       applySnapshot(imported.snapshot);
       setDraftVersion(imported.draftVersion);
+      draftSaveQueueRef.current.setVersion(imported.draftVersion);
       setDraftStatus('saved');
       notify('تم استيراد النسخة إلى مسودة الخادم بنجاح');
       return true;
@@ -1613,9 +1614,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const mergeLegacyMigration = async (): Promise<boolean> => {
     try {
       const merged = mergeMissingLegacyFields(currentSnapshot(), readLegacySnapshot(localStorage));
-      const imported = await apiClient.importContent(merged, draftVersion);
+      const imported = await apiClient.importContent(merged, draftSaveQueueRef.current.version);
       applySnapshot(imported.snapshot);
       setDraftVersion(imported.draftVersion);
+      draftSaveQueueRef.current.setVersion(imported.draftVersion);
       setDraftStatus('saved');
       notify('تم دمج الحقول المحلية الناقصة وحفظها في مسودة الخادم');
       return true;
@@ -1654,6 +1656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         profile,
         updateProfile,
         isProfileLoaded,
+        publishedContentStatus,
         avatarStatus,
         deleteAvatar,
 

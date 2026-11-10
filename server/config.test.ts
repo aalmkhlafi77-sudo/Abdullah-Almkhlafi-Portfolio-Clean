@@ -56,6 +56,16 @@ test('parses the Hostinger reverse-proxy hop count explicitly', () => {
   assert.throws(() => loadConfig({ ...validEnv(), TRUST_PROXY: 'all' }), /TRUST_PROXY/);
 });
 
+test('rejects upload locations inside Hostinger public and release directories', () => {
+  for (const segment of ['public_html', 'hbuilds', 'versions', 'last-source']) {
+    assert.throws(
+      () => loadConfig({ ...validEnv(), UPLOAD_ROOT: `/home/account/domains/example.test/${segment}/media` }),
+      /UPLOAD_ROOT/,
+      segment,
+    );
+  }
+});
+
 test('database health checks all six tables and main_site without mutation queries', async () => {
   const statements: string[] = [];
   const pool: QueryablePool = {
