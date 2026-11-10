@@ -12,15 +12,18 @@ import { createAuthRouter } from './auth/routes.js';
 import { loadConfig } from './config.js';
 import { createAdminContentRouter, createPublicContentRouter } from './content/routes.js';
 import { MySqlContentRepository } from './content/mysqlRepository.js';
+import { ensureDefaultSiteDocument } from './content/bootstrap.js';
 import { ContentService } from './content/service.js';
 import { checkDatabase, createDbPool, type QueryablePool } from './db.js';
 import { MySqlMediaRepository } from './media/mysqlRepository.js';
 import { createMediaRouter } from './media/routes.js';
 import { importSnapshot } from './migration/importSnapshot.js';
+import { createImportRouter } from './migration/routes.js';
 
 async function startServer(): Promise<void> {
 const config = loadConfig();
 const pool = createDbPool(config);
+await ensureDefaultSiteDocument(pool);
 const authRepository = new MySqlAuthRepository(pool);
 const initialAdminResult = await bootstrapInitialAdmin(authRepository, process.env);
 if (initialAdminResult === 'created') {
@@ -41,19 +44,12 @@ adminRouter.use(createMediaRouter({
   getDraft: (adminId) => contentService.getDraft(adminId),
   getPublished: () => contentService.getPublished(),
 }));
-adminRouter.post('/content/import', async (req, res) => {
-  try {
-    res.json(await importSnapshot(req.body.snapshot, {
-      mediaRepository,
-      uploadRoot: config.uploadRoot,
-      adminId: req.admin!.id,
-      expectedDraftVersion: req.body.expectedDraftVersion,
-      saveDraft: (snapshot, version, adminId) => contentService.saveDraft(snapshot, version, adminId),
-    }));
-  } catch {
-    res.status(400).json({ error: 'IMPORT_FAILED' });
-  }
-});
+adminRouter.use(createImportRouter((snapshot, expectedDraftVersion, adminId) => importSnapshot(snapshot, {
+  uploadRoot: config.uploadRoot,
+  adminId,
+  expectedDraftVersion,
+  saveDraft: (value, version, actorId, records) => contentService.importDraft(value, version, actorId, records),
+})));
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = createApp({

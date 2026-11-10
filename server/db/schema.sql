@@ -86,6 +86,5 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   CONSTRAINT fk_audit_logs_admin FOREIGN KEY (admin_id) REFERENCES admins (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO site_documents (document_key, draft_json)
-VALUES ('main_site', JSON_OBJECT())
-ON DUPLICATE KEY UPDATE document_key = VALUES(document_key);
+-- The application inserts a complete default Snapshot into main_site on first start.
+-- Import this schema before starting the application; startup does not create tables.
