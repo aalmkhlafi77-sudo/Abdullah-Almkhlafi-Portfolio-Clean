@@ -19,7 +19,7 @@ const VisualPageBuilder = React.lazy(() => import('./components/builder/VisualPa
 const ContentStudio = React.lazy(() => import('./components/studio/ContentStudio').then((module) => ({ default: module.ContentStudio })));
 
 const MainContent: React.FC = () => {
-  const { viewMode, theme, isAuthenticated, isLiveEditMode, showLivePropertiesPanel, publishedContentStatus } = useApp();
+  const { viewMode, theme, isAuthenticated, isLiveEditMode, showLivePropertiesPanel, publishedContentStatus, setShowLoginModal } = useApp();
 
   const isLiveSidebarActive = isAuthenticated && isLiveEditMode && showLivePropertiesPanel;
 
@@ -39,12 +39,20 @@ const MainContent: React.FC = () => {
       <React.Suspense fallback={<div className="min-h-screen flex items-center justify-center">جارٍ تحميل أدوات التحرير...</div>}>
       <AnimatePresence mode="wait">
         {viewMode === 'public' && publishedContentStatus !== 'ready' && !isAuthenticated && (
-          <main className="min-h-screen flex items-center justify-center px-6 text-center" role="status">
+          <main className="min-h-screen flex flex-col items-center justify-center gap-4 px-6 text-center" role="status">
             {publishedContentStatus === 'loading'
               ? 'جارٍ تحميل المحتوى المنشور...'
               : publishedContentStatus === 'unpublished'
                 ? 'لم يُنشر محتوى الموقع بعد.'
                 : 'تعذر تحميل المحتوى المنشور من الخادم. حاول مجددًا لاحقًا.'}
+            <button
+              id="unpublished-admin-login-btn"
+              type="button"
+              onClick={() => setShowLoginModal(true)}
+              className="rounded-xl border border-current px-4 py-2 text-sm"
+            >
+              دخول المسؤول
+            </button>
           </main>
         )}
         {viewMode === 'public' && (publishedContentStatus === 'ready' || isAuthenticated) && (
