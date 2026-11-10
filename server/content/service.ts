@@ -1,4 +1,5 @@
 import type { ContentRepository } from './repository.js';
+import type { MediaRecord } from '../media/repository.js';
 import { validatePortfolioSnapshot, type PortfolioSnapshotV1 } from './schema.js';
 import type { DraftContentResult, PublishedContentResult } from './types.js';
 
@@ -61,6 +62,30 @@ export class ContentService {
         entityType: 'site_document',
         entityId: 'main_site',
         metadata: { draftVersion },
+      });
+      return { snapshot: clean, draftVersion };
+    });
+  }
+
+  async importDraft(
+    snapshot: PortfolioSnapshotV1,
+    expectedVersion: number,
+    adminId: number,
+    mediaRecords: MediaRecord[],
+  ): Promise<DraftContentResult> {
+    const clean = validatePortfolioSnapshot(snapshot);
+    return this.repository.transaction(async (transaction) => {
+      const current = await transaction.getDocumentForUpdate();
+      if (current.draftVersion !== expectedVersion) throw new ContentConflictError(current.draftVersion);
+      for (const record of mediaRecords) await transaction.insertMedia(record);
+      const draftVersion = current.draftVersion + 1;
+      await transaction.updateDraft(clean, draftVersion, adminId);
+      await transaction.writeAudit({
+        adminId,
+        action: 'content.import',
+        entityType: 'site_document',
+        entityId: 'main_site',
+        metadata: { draftVersion, importedMedia: mediaRecords.length },
       });
       return { snapshot: clean, draftVersion };
     });

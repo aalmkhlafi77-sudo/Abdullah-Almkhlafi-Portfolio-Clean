@@ -1,11 +1,12 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
-import { ProfileModal } from './ProfileModal';
-import { SettingsModal } from './SettingsModal';
 import { LoginModal } from './LoginModal';
-import { IconLibraryModal } from './IconLibraryModal';
-import { ShowcaseManageModal } from './ShowcaseManageModal';
-import { ResumeCvModal } from './ResumeCvModal';
+
+const ProfileModal = React.lazy(() => import('./ProfileModal').then((module) => ({ default: module.ProfileModal })));
+const SettingsModal = React.lazy(() => import('./SettingsModal').then((module) => ({ default: module.SettingsModal })));
+const IconLibraryModal = React.lazy(() => import('./IconLibraryModal').then((module) => ({ default: module.IconLibraryModal })));
+const ShowcaseManageModal = React.lazy(() => import('./ShowcaseManageModal').then((module) => ({ default: module.ShowcaseManageModal })));
+const ResumeCvModal = React.lazy(() => import('./ResumeCvModal').then((module) => ({ default: module.ResumeCvModal })));
 
 export const GlobalModals: React.FC = () => {
   const { 
@@ -20,7 +21,9 @@ export const GlobalModals: React.FC = () => {
     applyPresetPackToServices,
     services,
     metrics,
-    theme
+    theme,
+    showShowcaseModal,
+    showResumeModal,
   } = useApp();
 
   const targetItem = iconLibraryTarget?.type === 'service' 
@@ -32,19 +35,20 @@ export const GlobalModals: React.FC = () => {
   return (
     <div id="global-modals-portal" className="relative z-[99999]">
       {/* Profile & Photo Editor Modal */}
-      <ProfileModal 
-        isOpen={showProfileModal} 
-        onClose={() => setShowProfileModal(false)} 
-      />
+      <React.Suspense fallback={null}>
+      {showProfileModal && <ProfileModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+      />}
 
       {/* Hero & System Settings Modal */}
-      <SettingsModal 
-        isOpen={showSettingsModal} 
-        onClose={() => setShowSettingsModal(false)} 
-      />
+      {showSettingsModal && <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+      />}
 
       {/* Icon Library Studio Modal */}
-      <IconLibraryModal
+      {showIconLibraryModal && <IconLibraryModal
         isOpen={showIconLibraryModal}
         onClose={() => setShowIconLibraryModal(false)}
         onSelectIcon={applyIconToTarget}
@@ -54,13 +58,14 @@ export const GlobalModals: React.FC = () => {
         currentSize={targetItem?.iconSize}
         currentRotation={targetItem?.iconRotation}
         theme={theme}
-      />
+      />}
 
       {/* Showcase Apps & Logos Manager Modal */}
-      <ShowcaseManageModal />
+      {showShowcaseModal && <ShowcaseManageModal />}
 
       {/* Interactive Resume / CV Generator & PDF Exporter */}
-      <ResumeCvModal />
+      {showResumeModal && <ResumeCvModal />}
+      </React.Suspense>
 
       {/* Admin Security Login Modal */}
       <LoginModal />

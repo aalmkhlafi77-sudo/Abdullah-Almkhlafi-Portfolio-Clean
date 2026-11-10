@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ShowcaseAppItem } from '../../types';
-import * as Icons from 'lucide-react';
+import { IconRenderer } from '../ui/IconRenderer';
 import { 
   ExternalLink, 
   Sparkles, 
@@ -62,9 +62,8 @@ export const ProjectShowcaseBar: React.FC<ProjectShowcaseBarProps> = ({
       );
     }
 
-    const IconComponent = (Icons as any)[app.iconName || 'AppWindow'] || Icons.AppWindow;
     return (
-      <IconComponent className="w-6 h-6 sm:w-7 sm:h-7 text-[#C5A059] transition-transform duration-300 group-hover:scale-110" />
+      <IconRenderer name={app.iconName || 'AppWindow'} className="w-6 h-6 sm:w-7 sm:h-7 text-[#C5A059] transition-transform duration-300 group-hover:scale-110" />
     );
   };
 

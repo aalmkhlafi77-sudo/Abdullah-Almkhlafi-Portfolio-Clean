@@ -1,8 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
-import { apiClient, ApiConflictError, ApiSessionExpiredError } from '../lib/apiClient';
+import { apiClient, ApiConflictError, ApiError, ApiSessionExpiredError } from '../lib/apiClient';
+import { parseBackupForImport } from '../lib/backupImport';
 import { createPortfolioSnapshot, type PortfolioSnapshotV1 } from '../lib/portfolioSnapshot';
 import { persistMediaDeletion } from '../lib/mediaDeletion';
 import { getLoginFailureMessage } from '../lib/loginFailure';
+import { createDraftSaveQueue } from '../lib/draftSaveQueue';
+import { loadPublishedContent } from '../lib/publishedContent';
 import {
   clearLegacyPersistence,
   listLegacyDifferences,
@@ -67,6 +70,7 @@ interface AppContextType {
   profile: ProfileData;
   updateProfile: (updates: Partial<ProfileData>) => void;
   isProfileLoaded: boolean;
+  publishedContentStatus: 'loading' | 'ready' | 'unpublished' | 'unavailable';
   avatarStatus: 'loading' | 'loaded-with-image' | 'loaded-without-image';
   deleteAvatar: () => Promise<void>;
 
@@ -175,7 +179,7 @@ interface AppContextType {
   resetMediaAdjustments: (id: string) => void;
   saveMediaVersion: (id: string, note?: string) => void;
   restoreMediaVersion: (id: string, versionId: string) => void;
-  addMediaItem: (item: MediaItem) => void;
+  addMediaItem: (item: MediaItem) => Promise<MediaItem | null>;
   deleteMediaItem: (id: string) => void;
 
   pages: BuilderPage[];
@@ -209,7 +213,7 @@ interface AppContextType {
   saveDraft: () => Promise<void>;
   restoreDraft: () => boolean;
   publishChanges: () => Promise<void>;
-  resetToDefaults: () => void;
+  resetToDefaults: () => Promise<void>;
   exportBackup: () => void;
   importBackup: (jsonData: string) => Promise<boolean>;
   previewLegacyMigration: () => string[];
@@ -217,6 +221,7 @@ interface AppContextType {
   clearLegacyData: (secondDeviceVerified: boolean) => boolean;
   savePortfolioToServer: (options?: {
     profileOverride?: ProfileData;
+    metricsOverride?: MetricItem[];
     mediaOverride?: MediaItem[];
     pagesOverride?: BuilderPage[];
     projectsOverride?: ProjectItem[];
@@ -224,6 +229,8 @@ interface AppContextType {
     servicesOverride?: ServiceItem[];
     solutionsOverride?: IntegratedSolutionItem[];
     showcaseAppsOverride?: ShowcaseAppItem[];
+    showcaseBarConfigOverride?: ShowcaseBarConfig;
+    cvResumeDataOverride?: CvResumeData;
     heroConfigOverride?: HeroConfig;
     isPublished?: boolean;
   }) => Promise<void>;
@@ -240,16 +247,6 @@ const AppContext = createContext<AppContextType | null>(null);
 
 const THEME_STORAGE_KEY = 'almkhlafi_theme_v2';
 
-const PUBLISHED_CACHE_KEY = 'almkhlafi_published_cache_v1';
-
-const safeSetItem = (key: string, value: string) => {
-  try {
-    localStorage.setItem(key, value);
-  } catch (e) {
-    console.warn(`Local storage write failed or quota exceeded for key: ${key}`, e);
-  }
-};
-
 export const isOldStockAvatar = (url?: string | null): boolean => {
   if (!url) return false;
   return url.includes('1507003211169-0a1dd7228f2d');
@@ -263,20 +260,17 @@ export const sanitizeProfileSocials = (prof: ProfileData): ProfileData => {
   if (!socials.facebook || socials.facebook === 'https://facebook.com/almkhlafi') {
     socials.facebook = 'https://www.facebook.com/bdallhhzaalmkhlafy';
   }
-  if (!socials.linkedin || socials.linkedin === 'https://linkedin.com/in/almkhlafi') {
-    socials.linkedin = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.x || socials.x === 'https://x.com/almkhlafi') {
-    socials.x = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.youtube || socials.youtube === 'https://youtube.com/@almkhlafi') {
-    socials.youtube = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.tiktok || socials.tiktok === 'https://tiktok.com/@almkhlafi') {
-    socials.tiktok = 'https://www.facebook.com/bdallhhzaalmkhlafy';
-  }
-  if (!socials.snapchat || socials.snapchat === 'https://snapchat.com/add/almkhlafi') {
-    socials.snapchat = 'https://www.facebook.com/bdallhhzaalmkhlafy';
+  const placeholderSocials = {
+    linkedin: 'https://linkedin.com/in/almkhlafi',
+    x: 'https://x.com/almkhlafi',
+    youtube: 'https://youtube.com/@almkhlafi',
+    tiktok: 'https://tiktok.com/@almkhlafi',
+    snapchat: 'https://snapchat.com/add/almkhlafi',
+  };
+  for (const platform of Object.keys(placeholderSocials) as Array<keyof typeof placeholderSocials>) {
+    if (socials[platform] === placeholderSocials[platform] || socials[platform] === socials.facebook) {
+      socials[platform] = '';
+    }
   }
   return {
     ...prof,
@@ -515,6 +509,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const draft = await apiClient.getDraft();
         applySnapshot(draft.snapshot);
         setDraftVersion(draft.draftVersion);
+        draftSaveQueueRef.current.setVersion(draft.draftVersion);
         setDraftStatus('saved');
       } catch (error) {
         console.error('Unable to load server draft after login:', error);
@@ -624,8 +619,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sanitizeProfileSocials({ ...initialProfile, avatarUrl: '' }),
   );
 
-  // Keep the image hidden until the server or the last published read cache is resolved.
+  // Keep the image hidden until the server read is resolved.
   const [isProfileLoaded, setIsProfileLoaded] = useState<boolean>(false);
+  const [publishedContentStatus, setPublishedContentStatus] = useState<'loading' | 'ready' | 'unpublished' | 'unavailable'>('loading');
 
   const avatarStatus: 'loading' | 'loaded-with-image' | 'loaded-without-image' = useMemo(() => {
     if (!isProfileLoaded) return 'loading';
@@ -749,8 +745,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDraftStatus('unsaved');
   };
 
-  const [draftStatus, setDraftStatus] = useState<'saved' | 'unsaved' | 'published'>('saved');
+  const [draftStatus, setDraftStatusState] = useState<'saved' | 'unsaved' | 'published'>('saved');
+  const draftRevisionRef = useRef(0);
+  const setDraftStatus = (status: 'saved' | 'unsaved' | 'published') => {
+    if (status === 'unsaved') draftRevisionRef.current += 1;
+    setDraftStatusState(status);
+  };
   const [draftVersion, setDraftVersion] = useState(0);
+  const draftSaveQueueRef = useRef(createDraftSaveQueue(apiClient));
+  const isImportingBackupRef = useRef(false);
   const lastServerSnapshotRef = useRef<PortfolioSnapshotV1 | null>(null);
   const [isCloudQuotaExhausted, setIsCloudQuotaExhausted] = useState(false);
 
@@ -796,19 +799,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     let cancelled = false;
     const initializeFromServer = async () => {
-      try {
-        const published = await apiClient.publicContent();
-        if (!cancelled) {
-          applySnapshot(published.snapshot);
-          safeSetItem(PUBLISHED_CACHE_KEY, JSON.stringify(published.snapshot));
-        }
-      } catch {
-        try {
-          const cached = localStorage.getItem(PUBLISHED_CACHE_KEY);
-          if (cached && !cancelled) applySnapshot(JSON.parse(cached));
-        } catch {}
-      } finally {
-        if (!cancelled) setIsProfileLoaded(true);
+      const published = await loadPublishedContent(() => apiClient.publicContent());
+      if (!cancelled) {
+        if (published.snapshot) applySnapshot(published.snapshot);
+        setPublishedContentStatus(published.status);
+        setIsProfileLoaded(true);
       }
 
       try {
@@ -820,6 +815,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!cancelled) {
           applySnapshot(draft.snapshot);
           setDraftVersion(draft.draftVersion);
+          draftSaveQueueRef.current.setVersion(draft.draftVersion);
           setDraftStatus('saved');
         }
       } catch (error) {
@@ -1066,29 +1062,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notify(`تمت استعادة الإصدار: ${version.label}`);
   };
 
-  const addMediaItem = async (item: MediaItem) => {
+  const addMediaItem = async (item: MediaItem): Promise<MediaItem | null> => {
     let persistedItem = { ...item };
     if (persistedItem.url?.startsWith('blob:')) {
       notify('لا يمكن حفظ رابط صورة مؤقت؛ ارفع الملف من جديد', 'warning');
-      return;
+      return null;
     }
     if (persistedItem.url?.startsWith('data:image/')) {
       try {
-        const blob = await (await fetch(persistedItem.url)).blob();
-        const extension = blob.type.split('/')[1] || 'png';
-        const uploaded = await apiClient.uploadMedia(new File([blob], `${persistedItem.name || 'image'}.${extension}`, { type: blob.type }));
+        const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,([a-z\d+/=]+)$/i.exec(persistedItem.url);
+        if (!match) throw new Error('Unsupported image data URL');
+        const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+        const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1];
+        const name = (persistedItem.name || 'image').replace(/\.[^.]+$/, '');
+        const uploaded = await apiClient.uploadMedia(new File([bytes], `${name}.${extension}`, { type: match[1] }));
         const publicUrl = String(uploaded.publicUrl);
         persistedItem = {
           ...persistedItem,
           id: String(uploaded.id),
           url: publicUrl,
           originalUrl: publicUrl,
-          type: String(uploaded.mimeType ?? blob.type),
+          type: String(uploaded.mimeType ?? match[1]),
         };
       } catch (err) {
         console.warn('Media upload failed:', err);
         notify('تعذر رفع الصورة إلى التخزين الدائم؛ لم تتم إضافتها', 'warning');
-        return;
+        return null;
       }
     }
     const updatedMedia = [persistedItem, ...mediaList.filter(m => m.id !== persistedItem.id)];
@@ -1096,6 +1095,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedMediaId(persistedItem.id);
     notify('تم رفع الصورة وإضافتها إلى مكتبة الوسائط الدائمة بنجاح');
     setDraftStatus('unsaved');
+    return persistedItem;
   };
 
   const deleteMediaItem = async (id: string) => {
@@ -1230,6 +1230,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const savePortfolioToServer = async (options: {
     profileOverride?: ProfileData;
+    metricsOverride?: MetricItem[];
     mediaOverride?: MediaItem[];
     pagesOverride?: BuilderPage[];
     projectsOverride?: ProjectItem[];
@@ -1237,12 +1238,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     servicesOverride?: ServiceItem[];
     solutionsOverride?: IntegratedSolutionItem[];
     showcaseAppsOverride?: ShowcaseAppItem[];
+    showcaseBarConfigOverride?: ShowcaseBarConfig;
+    cvResumeDataOverride?: CvResumeData;
     heroConfigOverride?: HeroConfig;
     isPublished?: boolean;
   } = {}): Promise<void> => {
     const snapshot = createPortfolioSnapshot({
       profile: options.profileOverride ?? profile,
-      metrics,
+      metrics: options.metricsOverride ?? metrics,
       services: options.servicesOverride ?? services,
       solutions: options.solutionsOverride ?? solutions,
       projects: options.projectsOverride ?? projects,
@@ -1250,22 +1253,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mediaList: options.mediaOverride ?? mediaList,
       pages: options.pagesOverride ?? pages,
       showcaseApps: options.showcaseAppsOverride ?? showcaseApps,
-      showcaseBarConfig,
-      cvResumeData,
+      showcaseBarConfig: options.showcaseBarConfigOverride ?? showcaseBarConfig,
+      cvResumeData: options.cvResumeDataOverride ?? cvResumeData,
       heroConfig: options.heroConfigOverride ?? heroConfig,
       brandVideoUrl,
     });
 
-    const saved = await apiClient.saveDraft(snapshot, draftVersion);
+    const revision = draftRevisionRef.current;
+    const { saved, published } = await draftSaveQueueRef.current.save(snapshot, options.isPublished);
     lastServerSnapshotRef.current = saved.snapshot;
     setDraftVersion(saved.draftVersion);
-    setDraftStatus('saved');
+    if (revision === draftRevisionRef.current) setDraftStatus('saved');
 
-    if (options.isPublished) {
-      const published = await apiClient.publish(saved.draftVersion);
+    if (published) {
       lastServerSnapshotRef.current = published.snapshot;
-      setDraftStatus('published');
-      safeSetItem(PUBLISHED_CACHE_KEY, JSON.stringify(published.snapshot));
+      if (revision === draftRevisionRef.current) setDraftStatus('published');
     }
   };
 
@@ -1433,11 +1435,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Draft & Publish
   const saveDraft = async (): Promise<void> => {
     setDraftStatus('unsaved');
+    const revision = draftRevisionRef.current;
     try {
       await savePortfolioToServer();
       const now = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastSavedTime(now);
-      notify('تم حفظ المسودة نهائياً في قاعدة بيانات الموقع ✓', 'success');
+      if (revision === draftRevisionRef.current) {
+        notify('تم حفظ المسودة نهائياً في قاعدة بيانات الموقع ✓', 'success');
+      } else {
+        notify('حُفظت نسخة من المسودة، وتوجد تعديلات أحدث لم تُحفظ بعد', 'warning');
+      }
     } catch (error) {
       setDraftStatus('unsaved');
       if (error instanceof ApiConflictError) {
@@ -1464,12 +1471,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const publishChanges = async (): Promise<void> => {
     setDraftStatus('unsaved');
+    const revision = draftRevisionRef.current;
     try {
       await savePortfolioToServer({ isPublished: true });
       const now = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastSavedTime(now);
-      notify('تم نشر التغييرات من قاعدة البيانات وظهورها لجميع الأجهزة 🚀', 'success');
+      if (revision === draftRevisionRef.current) {
+        notify('تم نشر التغييرات من قاعدة البيانات وظهورها لجميع الأجهزة 🚀', 'success');
+      } else {
+        notify('نُشرت النسخة السابقة، وتوجد تعديلات أحدث لم تُنشر بعد', 'warning');
+      }
     } catch (error) {
+      setDraftVersion(draftSaveQueueRef.current.version);
       setDraftStatus('unsaved');
       if (error instanceof ApiConflictError) {
         notify(`تعارض مع مسودة أحدث على الخادم (الإصدار ${error.currentVersion})؛ لم يتم النشر`, 'warning');
@@ -1487,6 +1500,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (draftStatus !== 'unsaved') return;
 
     const autoSyncTimer = setTimeout(async () => {
+      if (isImportingBackupRef.current) return;
       try {
         console.log('[Auto-Sync] Debounced cloud synchronization triggered...');
         await savePortfolioToServer({
@@ -1500,7 +1514,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           showcaseAppsOverride: showcaseApps,
           heroConfigOverride: heroConfig
         });
-        setDraftStatus('saved');
         console.log('[Auto-Sync] Background cloud sync completed successfully.');
       } catch (err) {
         console.warn('[Auto-Sync] Background sync deferred:', err);
@@ -1510,7 +1523,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearTimeout(autoSyncTimer);
   }, [draftStatus, projects, articles, profile, heroConfig, services, solutions, showcaseApps, pages, mediaList, metrics, showcaseBarConfig, cvResumeData, brandVideoUrl]);
 
-  const resetToDefaults = () => {
+  const resetToDefaults = async (): Promise<void> => {
     setProfile(initialProfile);
     setMetrics(initialMetrics);
     setServices(initialServices);
@@ -1522,8 +1535,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setShowcaseApps(initialShowcaseApps);
     setShowcaseBarConfig(initialShowcaseBarConfig);
     setCvResumeData(initialCvResumeData);
-    setDraftStatus('saved');
-    notify('تمت استعادة جميع البيانات والتهيئات الافتراضية بنجاح');
+    setDraftStatus('unsaved');
+    const revision = draftRevisionRef.current;
+    try {
+      await savePortfolioToServer({
+        profileOverride: initialProfile,
+        metricsOverride: initialMetrics,
+        servicesOverride: initialServices,
+        solutionsOverride: initialSolutions,
+        projectsOverride: initialProjects,
+        articlesOverride: initialArticles,
+        mediaOverride: initialMedia,
+        pagesOverride: initialPages,
+        showcaseAppsOverride: initialShowcaseApps,
+        showcaseBarConfigOverride: initialShowcaseBarConfig,
+        cvResumeDataOverride: initialCvResumeData,
+      });
+      if (revision === draftRevisionRef.current) {
+        notify('تمت استعادة القيم الافتراضية وحفظها في مسودة الخادم', 'success');
+      } else {
+        notify('حُفظت القيم الافتراضية، وتوجد تعديلات أحدث لم تُحفظ بعد', 'warning');
+      }
+    } catch (error) {
+      setDraftStatus('unsaved');
+      if (error instanceof ApiConflictError) {
+        notify(`توجد مسودة أحدث على الخادم (الإصدار ${error.currentVersion})؛ بقيت القيم الافتراضية غير محفوظة`, 'warning');
+      } else if (error instanceof ApiSessionExpiredError) {
+        setIsAuthenticated(false);
+        notify('انتهت جلسة الإدارة؛ بقيت القيم الافتراضية غير محفوظة', 'warning');
+      } else {
+        notify('تعذر حفظ القيم الافتراضية على الخادم؛ بقيت التغييرات غير محفوظة', 'warning');
+      }
+    }
   };
 
   const exportBackup = () => {
@@ -1569,34 +1612,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const importBackup = async (jsonData: string): Promise<boolean> => {
+    isImportingBackupRef.current = true;
+    const revision = draftRevisionRef.current;
     try {
-      const parsed = JSON.parse(jsonData);
-      const baseline = currentSnapshot();
-      const snapshot = createPortfolioSnapshot({
-        profile: parsed.profile ?? baseline.profile,
-        metrics: parsed.metrics ?? baseline.metrics,
-        services: parsed.services ?? baseline.services,
-        solutions: parsed.solutions ?? baseline.solutions,
-        projects: parsed.projects ?? baseline.projects,
-        articles: parsed.articles ?? baseline.articles,
-        mediaList: parsed.mediaList ?? baseline.mediaList,
-        pages: parsed.pages ?? baseline.pages,
-        showcaseApps: parsed.showcaseApps ?? baseline.showcaseApps,
-        showcaseBarConfig: parsed.showcaseBarConfig ?? baseline.showcaseBarConfig,
-        cvResumeData: parsed.cvResumeData ?? baseline.cvResumeData,
-        heroConfig: parsed.heroConfig ?? baseline.heroConfig,
-        brandVideoUrl: parsed.brandVideoUrl ?? baseline.brandVideoUrl,
-      }, parsed.savedAt);
-      const imported = await apiClient.importContent(snapshot, draftVersion);
-      applySnapshot(imported.snapshot);
+      const { snapshot } = parseBackupForImport(jsonData);
+      const imported = await draftSaveQueueRef.current.importSnapshot(snapshot, apiClient.importContent);
       setDraftVersion(imported.draftVersion);
-      setDraftStatus('saved');
-      notify('تم استيراد النسخة إلى مسودة الخادم بنجاح');
+      lastServerSnapshotRef.current = imported.snapshot;
+      if (revision === draftRevisionRef.current) {
+        applySnapshot(imported.snapshot);
+        setDraftStatus('saved');
+        notify('تم استيراد النسخة إلى مسودة الخادم بنجاح');
+      } else {
+        setDraftStatus('unsaved');
+        notify('حُفظت النسخة المستوردة، وتوجد تعديلات أحدث في هذا التبويب لم تُحفظ بعد', 'warning');
+      }
       return true;
     } catch (error) {
-      console.error('Backup import failed:', error);
-      notify('فشل الاستيراد أو الحفظ على الخادم؛ لم تُعرض رسالة نجاح وهمية', 'warning');
+      if (error instanceof ApiConflictError) {
+        notify(`تعارض مع مسودة أحدث على الخادم (الإصدار ${error.currentVersion})؛ لم تُستبدل المسودة`, 'warning');
+      } else if (error instanceof ApiSessionExpiredError) {
+        setIsAuthenticated(false);
+        notify('انتهت جلسة الإدارة؛ سجّل الدخول مجددًا قبل الاستيراد', 'warning');
+      } else if (error instanceof ApiError && error.code === 'INVALID_EMBEDDED_IMAGE') {
+        notify('تحتوي النسخة على صورة مضمّنة غير صالحة أو رابط مؤقت؛ لم تُستبدل المسودة', 'warning');
+      } else if (error instanceof ApiError) {
+        notify(error.status >= 500 ? 'تعذر تخزين الصور أو حفظها في قاعدة البيانات؛ لم تُستبدل المسودة' : `رفض الخادم النسخة (${error.code})؛ لم تُستبدل المسودة`, 'warning');
+      } else {
+        notify(error instanceof Error ? error.message : 'تعذر قراءة ملف النسخة الاحتياطية', 'warning');
+      }
       return false;
+    } finally {
+      isImportingBackupRef.current = false;
     }
   };
 
@@ -1613,9 +1660,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const mergeLegacyMigration = async (): Promise<boolean> => {
     try {
       const merged = mergeMissingLegacyFields(currentSnapshot(), readLegacySnapshot(localStorage));
-      const imported = await apiClient.importContent(merged, draftVersion);
+      const imported = await apiClient.importContent(merged, draftSaveQueueRef.current.version);
       applySnapshot(imported.snapshot);
       setDraftVersion(imported.draftVersion);
+      draftSaveQueueRef.current.setVersion(imported.draftVersion);
       setDraftStatus('saved');
       notify('تم دمج الحقول المحلية الناقصة وحفظها في مسودة الخادم');
       return true;
@@ -1654,6 +1702,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         profile,
         updateProfile,
         isProfileLoaded,
+        publishedContentStatus,
         avatarStatus,
         deleteAvatar,
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { PortfolioSnapshotV1 } from './schema.js';
+import type { MediaRecord } from '../media/repository.js';
 import { ContentConflictError, ContentNotPublishedError, ContentService } from './service.js';
 import type {
   AuditEntry,
@@ -35,18 +36,20 @@ class MemoryContentRepository implements ContentRepository, ContentTransaction {
   };
   versions: ContentVersion[] = [];
   audits: AuditEntry[] = [];
+  mediaRecords: MediaRecord[] = [];
   failAudit = false;
 
   async getDocument() { return structuredClone(this.document); }
   async getVersion(id: number) { return structuredClone(this.versions.find((version) => version.id === id) ?? null); }
   async transaction<T>(work: (transaction: ContentTransaction) => Promise<T>): Promise<T> {
-    const before = structuredClone({ document: this.document, versions: this.versions, audits: this.audits });
+    const before = structuredClone({ document: this.document, versions: this.versions, audits: this.audits, mediaRecords: this.mediaRecords });
     try {
       return await work(this);
     } catch (error) {
       this.document = before.document;
       this.versions = before.versions;
       this.audits = before.audits;
+      this.mediaRecords = before.mediaRecords;
       throw error;
     }
   }
@@ -69,7 +72,30 @@ class MemoryContentRepository implements ContentRepository, ContentTransaction {
     if (this.failAudit) throw new Error('simulated audit failure');
     this.audits.push(structuredClone(entry));
   }
+  async insertMedia(record: MediaRecord) { this.mediaRecords.push(record); }
 }
+
+test('importing media and draft commits together and respects the expected version', async () => {
+  const repository = new MemoryContentRepository();
+  const service = new ContentService(repository);
+  const record = { id: 'image-one', storageName: 'image-one.png', originalName: 'old.png', mimeType: 'image/png', sizeBytes: 42, publicUrl: '/media/image-one.png', createdBy: 7 };
+  await assert.rejects(() => service.importDraft(snapshot('stale'), 0, 7, [record]), (error: unknown) => error instanceof ContentConflictError);
+  assert.equal(repository.mediaRecords.length, 0);
+  await service.importDraft(snapshot('new'), 1, 7, [record]);
+  assert.equal(repository.mediaRecords.length, 1);
+  assert.equal(repository.document.draft.profile.name, 'new');
+  assert.equal(repository.document.draftVersion, 2);
+});
+
+test('failed database write rolls back imported media and draft together', async () => {
+  const repository = new MemoryContentRepository();
+  repository.failAudit = true;
+  const service = new ContentService(repository);
+  const record = { id: 'image-one', storageName: 'image-one.png', originalName: 'old.png', mimeType: 'image/png', sizeBytes: 42, publicUrl: '/media/image-one.png', createdBy: 7 };
+  await assert.rejects(() => service.importDraft(snapshot('new'), 1, 7, [record]), /audit failure/);
+  assert.equal(repository.mediaRecords.length, 0);
+  assert.equal(repository.document.draft.profile.name, 'draft-one');
+});
 
 test('saving a draft increments only the draft version', async () => {
   const repository = new MemoryContentRepository();

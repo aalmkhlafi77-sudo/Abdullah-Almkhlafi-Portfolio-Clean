@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache/
 build/
 dist/
 dist-server/
@@ -6,5 +7,6 @@ uploads/
 coverage/
 .DS_Store
 *.log
+almkhlafi-backup-*.json
 .env*
 !.env.example

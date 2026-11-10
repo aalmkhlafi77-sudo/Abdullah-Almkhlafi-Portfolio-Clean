@@ -13,12 +13,13 @@ import { PublicContact } from './components/public/PublicContact';
 import { PublicFooter } from './components/public/PublicFooter';
 import { FloatingWidgets } from './components/public/FloatingWidgets';
 import { UnifiedPropertiesSidebar } from './components/public/services/UnifiedPropertiesSidebar';
-import { VisualPageBuilder } from './components/builder/VisualPageBuilder';
-import { ContentStudio } from './components/studio/ContentStudio';
 import { GlobalModals } from './components/common/GlobalModals';
 
+const VisualPageBuilder = React.lazy(() => import('./components/builder/VisualPageBuilder').then((module) => ({ default: module.VisualPageBuilder })));
+const ContentStudio = React.lazy(() => import('./components/studio/ContentStudio').then((module) => ({ default: module.ContentStudio })));
+
 const MainContent: React.FC = () => {
-  const { viewMode, theme, isAuthenticated, isLiveEditMode, showLivePropertiesPanel } = useApp();
+  const { viewMode, theme, isAuthenticated, isLiveEditMode, showLivePropertiesPanel, publishedContentStatus, setShowLoginModal } = useApp();
 
   const isLiveSidebarActive = isAuthenticated && isLiveEditMode && showLivePropertiesPanel;
 
@@ -35,8 +36,26 @@ const MainContent: React.FC = () => {
       {(isAuthenticated || viewMode !== 'public') && <TopGlobalBar />}
 
       {/* Main View Router with subtle smooth fade-in transition */}
+      <React.Suspense fallback={<div className="min-h-screen flex items-center justify-center">جارٍ تحميل أدوات التحرير...</div>}>
       <AnimatePresence mode="wait">
-        {viewMode === 'public' && (
+        {viewMode === 'public' && publishedContentStatus !== 'ready' && !isAuthenticated && (
+          <main className="min-h-screen flex flex-col items-center justify-center gap-4 px-6 text-center" role="status">
+            {publishedContentStatus === 'loading'
+              ? 'جارٍ تحميل المحتوى المنشور...'
+              : publishedContentStatus === 'unpublished'
+                ? 'لم يُنشر محتوى الموقع بعد.'
+                : 'تعذر تحميل المحتوى المنشور من الخادم. حاول مجددًا لاحقًا.'}
+            <button
+              id="unpublished-admin-login-btn"
+              type="button"
+              onClick={() => setShowLoginModal(true)}
+              className="rounded-xl border border-current px-4 py-2 text-sm"
+            >
+              دخول المسؤول
+            </button>
+          </main>
+        )}
+        {viewMode === 'public' && (publishedContentStatus === 'ready' || isAuthenticated) && (
           <div className="relative min-h-[calc(100vh-44px)] flex w-full">
             {/* Page Canvas Container - dynamically contracts on desktop when Properties Inspector opens */}
             <motion.main 
@@ -94,6 +113,7 @@ const MainContent: React.FC = () => {
           </motion.main>
         )}
       </AnimatePresence>
+      </React.Suspense>
 
       {/* Global Layer-safe Modals */}
       <GlobalModals />

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { 
   Globe, 
@@ -45,14 +45,12 @@ export const TopGlobalBar: React.FC = () => {
     resetToDefaults, 
     restoreDraft,
     exportBackup, 
-    importBackup,
     notify,
     isLiveEditMode,
     setIsLiveEditMode,
     setStudioTab
   } = useApp();
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -94,22 +92,6 @@ export const TopGlobalBar: React.FC = () => {
 
   const handleRedo = () => {
     notify('تم تحديث التغييرات الأخيرة', 'info');
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const content = event.target?.result as string;
-      if (content) {
-        await importBackup(content);
-      }
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    };
-    reader.readAsText(file);
   };
 
   return (
@@ -332,17 +314,10 @@ export const TopGlobalBar: React.FC = () => {
             </button>
 
             {/* Backup / Import */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileUpload}
-              accept=".json"
-              className="hidden"
-            />
             <button
               id="top-bar-import-backup-btn"
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => openSettingsModal('backup')}
               className="p-1.5 text-white/50 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
               title="استيراد نسخة احتياطية (JSON)"
             >
@@ -400,7 +375,7 @@ export const TopGlobalBar: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  resetToDefaults();
+                  void resetToDefaults();
                   setShowResetModal(false);
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-[#C5A059] text-black hover:bg-[#D4AF37]"

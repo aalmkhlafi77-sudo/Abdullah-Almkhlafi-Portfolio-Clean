@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import express from 'express';
+import request from 'supertest';
 
 import type { PortfolioSnapshotV1 } from '../content/schema.js';
 import type { MediaRecord, MediaRepository } from './repository.js';
-import { deleteMediaAsset, isMediaReferenced } from './routes.js';
+import { createMediaRouter, deleteMediaAsset, isMediaReferenced } from './routes.js';
 import { detectImageType, resolveMediaPath, storeImage } from './storage.js';
 
 const PNG = Buffer.from(
@@ -81,4 +83,75 @@ test('refuses deletion when a media URL is used by draft or published content', 
     /referenced/i,
   );
   assert.equal(removed, false);
+});
+
+test('keeps the stored image when deleting its database record fails', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portfolio-media-'));
+  try {
+    const stored = await storeImage(PNG, { ext: 'png', mime: 'image/png' }, root);
+    const record: MediaRecord = {
+      id: 'media-1', storageName: stored.storageName, originalName: 'image.png',
+      mimeType: 'image/png', sizeBytes: PNG.length, publicUrl: stored.publicUrl, createdBy: 1,
+    };
+    const repository: MediaRepository = {
+      async insert(value) { return value; },
+      async findById() { return record; },
+      async delete() { throw new Error('database unavailable'); },
+    };
+    await assert.rejects(
+      () => deleteMediaAsset(record.id, { repository, uploadRoot: root, draft: emptySnapshot(), published: null }),
+      /database unavailable/,
+    );
+    assert.deepEqual(await readFile(stored.absolutePath), PNG);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('does not delete media when the published-content lookup fails', async () => {
+  const record: MediaRecord = {
+    id: 'media-1', storageName: 'image.png', originalName: 'image.png',
+    mimeType: 'image/png', sizeBytes: PNG.length, publicUrl: '/media/image.png', createdBy: 1,
+  };
+  let deleted = false;
+  const repository: MediaRepository = {
+    async insert(value) { return value; },
+    async findById() { return record; },
+    async delete() { deleted = true; },
+  };
+  const app = express();
+  app.use((req, _res, next) => { req.admin = { id: 1, username: 'admin' }; next(); });
+  app.use(createMediaRouter({
+    repository, uploadRoot: os.tmpdir(),
+    getDraft: async () => ({ snapshot: emptySnapshot() }),
+    getPublished: async () => { throw new Error('database unavailable'); },
+  }));
+
+  const response = await request(app).delete('/media/media-1');
+  assert.equal(response.status, 500);
+  assert.equal(deleted, false);
+});
+
+test('an image upload reports a server failure when database registration fails', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portfolio-media-'));
+  try {
+    const repository: MediaRepository = {
+      async insert() { throw new Error('database unavailable'); },
+      async findById() { return null; },
+      async delete() {},
+    };
+    const app = express();
+    app.use((req, _res, next) => { req.admin = { id: 1, username: 'admin' }; next(); });
+    app.use(createMediaRouter({
+      repository, uploadRoot: root,
+      getDraft: async () => ({ snapshot: emptySnapshot() }),
+      getPublished: async () => ({ snapshot: emptySnapshot() }),
+    }));
+
+    const response = await request(app).post('/media').attach('file', PNG, 'image.png');
+    assert.equal(response.status, 500);
+    assert.deepEqual(await readdir(root), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

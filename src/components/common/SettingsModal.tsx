@@ -47,6 +47,7 @@ import { AnimatedHeroBackground } from '../public/AnimatedHeroBackground';
 import { ServicesManageTab } from './ServicesManageTab';
 import { ICON_PRESET_COLLECTIONS } from './IconPresets';
 import { IconRenderer } from '../ui/IconRenderer';
+import { BackupImportCard } from './BackupImportCard';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -122,8 +123,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, d
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSavingSecurity, setIsSavingSecurity] = useState(false);
-  const [importJsonText, setImportJsonText] = useState('');
-  const [isImportingBackup, setIsImportingBackup] = useState(false);
   const [legacyDifferences, setLegacyDifferences] = useState<string[] | null>(null);
   const [isMergingLegacy, setIsMergingLegacy] = useState(false);
   const [secondDeviceVerified, setSecondDeviceVerified] = useState(false);
@@ -1740,49 +1739,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, d
                   </button>
                 </div>
 
-                {/* Import Card */}
-                <div className={`p-5 rounded-2xl border space-y-3 ${
-                  theme === 'dark' ? 'bg-[#1A1917] border-[#2E2B26]' : 'bg-[#FAF8F5] border-[#E5E0D8]'
-                }`}>
-                  <div className="flex items-center gap-2.5 text-[#C5A059] font-bold text-sm">
-                    <Upload className="w-5 h-5" />
-                    <span>استيراد واستعادة نسخة احتياطية</span>
-                  </div>
-                  <p className="text-xs text-[#8E877D] leading-relaxed">
-                    ألصق محتوى ملف JSON لاستعادته إلى مسودة الخادم. لن تظهر رسالة نجاح إلا بعد تأكيد الحفظ في قاعدة البيانات.
-                  </p>
-                  <textarea
-                    rows={2}
-                    value={importJsonText}
-                    onChange={(e) => setImportJsonText(e.target.value)}
-                    placeholder='ألصق نص JSON هنا...'
-                    className={`w-full p-2.5 rounded-xl text-xs border outline-none font-mono ${
-                      theme === 'dark' ? 'bg-[#121110] border-[#2E2B26] text-[#F9F7F2]' : 'bg-[#FFFFFF] border-[#E5E0D8] text-[#121212]'
-                    }`}
-                  />
-                  <button
-                    type="button"
-                    disabled={isImportingBackup}
-                    onClick={async () => {
-                      if (!importJsonText.trim()) {
-                        notify('يرجى لصق نص JSON صحيح', 'warning');
-                        return;
-                      }
-                      setIsImportingBackup(true);
-                      try {
-                        if (await importBackup(importJsonText)) setImportJsonText('');
-                      } finally {
-                        setIsImportingBackup(false);
-                      }
-                    }}
-                    className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer disabled:opacity-50 ${
-                      theme === 'dark' ? 'bg-[#24221E] border-[#38342D] text-white hover:bg-[#2C2924]' : 'bg-[#FFFFFF] border-[#E5E0D8] text-[#121212] hover:bg-[#F2EFE9]'
-                    }`}
-                  >
-                    <Upload className="w-4 h-4 text-[#C5A059]" />
-                    <span>{isImportingBackup ? 'جارٍ الحفظ على الخادم...' : 'استيراد إلى مسودة الخادم'}</span>
-                  </button>
-                </div>
+                <BackupImportCard theme={theme} onImport={importBackup} />
 
               </div>
 

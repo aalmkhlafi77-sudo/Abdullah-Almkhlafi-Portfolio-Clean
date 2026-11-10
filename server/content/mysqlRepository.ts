@@ -122,6 +122,14 @@ export class MySqlContentRepository implements ContentRepository {
 
   private createTransaction(connection: PoolConnection): ContentTransaction {
     return {
+      insertMedia: async (record) => {
+        await connection.execute(
+          `INSERT INTO media_files
+           (id, storage_name, original_name, mime_type, size_bytes, public_url, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [record.id, record.storageName, record.originalName, record.mimeType, record.sizeBytes, record.publicUrl, record.createdBy],
+        );
+      },
       getDocumentForUpdate: async () => {
         const [rows] = await connection.query<DocumentRow[]>(`${documentSelect} FOR UPDATE`);
         if (!rows[0]) throw new Error('main_site document is missing');

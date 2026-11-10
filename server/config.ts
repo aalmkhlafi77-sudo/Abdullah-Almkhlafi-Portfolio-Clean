@@ -56,6 +56,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): AppConfig => {
 
   const uploadRoot = requireValue(env, 'UPLOAD_ROOT');
   if (!path.isAbsolute(uploadRoot)) throw new ConfigurationError('UPLOAD_ROOT');
+  const forbiddenUploadParents = new Set(['public_html', 'hbuilds', 'versions', 'last-source']);
+  if (path.resolve(uploadRoot).split(/[\\/]+/).some((segment) => forbiddenUploadParents.has(segment.toLowerCase()))) {
+    throw new ConfigurationError('UPLOAD_ROOT');
+  }
 
   return {
     nodeEnv: nodeEnvValue as AppConfig['nodeEnv'],
