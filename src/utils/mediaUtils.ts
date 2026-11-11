@@ -83,13 +83,21 @@ export function getBrandVideoEmbedInfo(url?: string, loop: boolean = true): Vide
     return { isVideo: false, provider: 'none', embedUrl: '' };
   }
 
-  // YouTube match
-  const youtubeMatch = trimmed.match(
-    /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/i
-  );
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') parsed = null;
+  } catch { /* Relative /media/ URLs and legacy data videos are handled below. */ }
 
-  if (youtubeMatch && youtubeMatch[1]) {
-    const videoId = youtubeMatch[1];
+  const host = parsed?.hostname.toLowerCase();
+  const youtubeId = host === 'youtu.be' || host === 'www.youtu.be'
+    ? parsed?.pathname.match(/^\/([\w-]{11})\/?$/)?.[1]
+    : ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtube-nocookie.com', 'www.youtube-nocookie.com'].includes(host ?? '')
+      ? parsed?.pathname === '/watch' ? parsed.searchParams.get('v') : parsed?.pathname.match(/^\/(?:embed|v|shorts)\/([\w-]{11})\/?$/)?.[1]
+      : null;
+
+  if (youtubeId && /^[\w-]{11}$/.test(youtubeId)) {
+    const videoId = youtubeId;
     // Notice: playlist=${videoId}&loop=1 is strictly needed for seamless continuous YouTube looping
     const loopParam = loop ? `&loop=1&playlist=${videoId}` : '';
     const embedUrl = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1${loopParam}&controls=1&rel=0&modestbranding=1&playsinline=1&enablejsapi=1`;
@@ -101,10 +109,11 @@ export function getBrandVideoEmbedInfo(url?: string, loop: boolean = true): Vide
     };
   }
 
-  // Vimeo match
-  const vimeoMatch = trimmed.match(/vimeo\.com\/(?:channels\/(?:\w+\/)?|groups\/([^\/]*)\/videos\/|album\/(\d+)\/video\/|video\/|)(\d+)/i);
-  if (vimeoMatch && (vimeoMatch[3] || vimeoMatch[2] || vimeoMatch[1])) {
-    const videoId = vimeoMatch[3] || vimeoMatch[2] || vimeoMatch[1];
+  const vimeoId = ['vimeo.com', 'www.vimeo.com', 'player.vimeo.com'].includes(host ?? '')
+    ? parsed?.pathname.match(/^\/(?:channels\/[^/]+\/|groups\/[^/]+\/videos\/|album\/\d+\/video\/|video\/)?(\d+)\/?$/)?.[1]
+    : null;
+  if (vimeoId) {
+    const videoId = vimeoId;
     return {
       isVideo: true,
       provider: 'vimeo',
@@ -113,12 +122,12 @@ export function getBrandVideoEmbedInfo(url?: string, loop: boolean = true): Vide
     };
   }
 
-  // Direct video
-  return {
-    isVideo: true,
-    provider: 'direct',
-    embedUrl: trimmed
-  };
+  // Only direct video files are playable here. Ordinary webpages are not media streams.
+  if (/^data:video\/(?:mp4|webm);base64,/i.test(trimmed) ||
+      (/^(?:https:\/\/|\/media\/)/i.test(trimmed) && /\.(?:mp4|webm)(?:[?#].*)?$/i.test(trimmed))) {
+    return { isVideo: true, provider: 'direct', embedUrl: trimmed };
+  }
+  return { isVideo: false, provider: 'none', embedUrl: '' };
 }
 
 /**

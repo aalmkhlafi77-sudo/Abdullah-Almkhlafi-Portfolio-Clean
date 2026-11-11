@@ -28,6 +28,8 @@ import {
   Film
 } from 'lucide-react';
 import { getBrandVideoEmbedInfo, GUIDANCE_VIDEO_PRESETS } from '../../utils/mediaUtils';
+import { apiClient } from '../../lib/apiClient';
+import { persistBrandVideoFile } from '../../lib/videoUpload';
 
 interface PublicExpertiseProps {
   title?: string;
@@ -67,6 +69,7 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
   const [showVideoModal, setShowVideoModal] = useState<boolean>(false);
   const [videoModalTab, setVideoModalTab] = useState<'url' | 'upload' | 'presets'>('url');
   const [videoUrlDraft, setVideoUrlDraft] = useState<string>('');
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -85,8 +88,7 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
         videoRef.current.pause();
         setIsPlaying(false);
       } else {
-        videoRef.current.play();
-        setIsPlaying(true);
+        void videoRef.current.play().catch(() => setVideoError(true));
       }
     }
   };
@@ -102,35 +104,36 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
 
   const handleApplyVideoUrl = (urlToApply: string) => {
     const trimmed = urlToApply.trim();
-    if (!trimmed) return;
+    if (!getBrandVideoEmbedInfo(trimmed).isVideo) {
+      notify('أدخل رابط YouTube أو Vimeo صالحًا، أو رابط HTTPS مباشرًا لملف MP4/WebM.', 'warning');
+      return;
+    }
     updateBrandVideoUrl(trimmed);
     setVideoError(false);
     setShowVideoModal(false);
   };
 
-  const handleVideoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (file.size > 8 * 1024 * 1024) {
-      notify('حجم الفيديو المرفوع كبير (أكثر من 8 ميجابايت). للملفات الكبيرة يُفضّل استخدام رابط YouTube لضمان سرعة التحميل وتكرار التشغيل دون استهلاك للذاكرة.', 'warning');
+    e.target.value = '';
+    if (isUploadingVideo) return;
+    if (file.size > 50 * 1024 * 1024 || file.size === 0) {
+      notify('يجب أن يكون الفيديو صالحًا ولا يتجاوز 50 ميجابايت.', 'warning');
       return;
     }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      if (dataUrl) {
-        updateBrandVideoUrl(dataUrl);
+    setIsUploadingVideo(true);
+    try {
+      const stored = await persistBrandVideoFile(file, apiClient.uploadVideo, updateBrandVideoUrl, (message) => notify(message, 'success'));
+      if (stored) {
         setVideoError(false);
         setShowVideoModal(false);
-        notify('تم رفع الفيديو وحفظه بنجاح وتشغيله بتكرار مستمر!', 'success');
+      } else {
+        notify('تعذر رفع الفيديو أو لم يؤكد الخادم تخزينه. لم تتغير المسودة.', 'warning');
       }
-    };
-    reader.onerror = () => {
-      notify('حدث خطأ أثناء قراءة ملف الفيديو', 'warning');
-    };
-    reader.readAsDataURL(file);
+    } finally {
+      setIsUploadingVideo(false);
+    }
   };
 
   // Modals state
@@ -244,23 +247,16 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
                   <video
                     ref={videoRef}
                     key={brandVideoUrl}
+                    src={videoInfo.embedUrl}
                     autoPlay
                     loop
                     muted={isMuted}
                     playsInline
                     className="w-full h-full object-cover transform transition-transform duration-1000 group-hover:scale-102"
-                    onError={() => {
-                      console.warn("Video failed to load:", brandVideoUrl);
-                      setVideoError(true);
-                      if (brandVideoUrl && brandVideoUrl.startsWith('blob:')) {
-                        updateBrandVideoUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
-                      }
-                    }}
-                  >
-                    <source src={brandVideoUrl} type="video/mp4" />
-                    <source src={brandVideoUrl} type="video/webm" />
-                    متصفحك لا يدعم عرض الفيديو.
-                  </video>
+                    onError={() => setVideoError(true)}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                  >متصفحك لا يدعم عرض الفيديو.</video>
                 )}
 
                 {/* Hover Play/Pause Control Button (For direct video) */}
@@ -320,9 +316,9 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
                 <div className="w-16 h-16 rounded-2xl bg-[#C5A059]/20 border border-[#C5A059]/50 flex items-center justify-center mb-3 shadow-lg shadow-[#C5A059]/10">
                   <Film className="w-8 h-8 text-[#C5A059]" />
                 </div>
-                <h4 className="text-sm sm:text-base font-bold text-white mb-1.5">شاشة الفيديو التفاعلية (لوحة تحكم المسؤول)</h4>
+                <h4 className="text-sm sm:text-base font-bold text-white mb-1.5">{videoError ? 'تعذر تشغيل الفيديو' : 'شاشة الفيديو التفاعلية (لوحة تحكم المسؤول)'}</h4>
                 <p className="text-xs text-white/70 max-w-md mb-4 leading-relaxed">
-                  يمكنك كمسؤول ربط الشاشة برابط يوتيوب أو رفع فيديو قصير إرشادي بتكرار مستمر.
+                  {videoError ? 'تحقق من الرابط أو ترميز الملف، ثم اختر فيديو آخر. ملفات MP4 تعمل عادةً بترميز H.264.' : 'يمكنك كمسؤول ربط الشاشة برابط يوتيوب أو رفع فيديو قصير إرشادي بتكرار مستمر.'}
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-2.5">
                   <button
@@ -340,18 +336,19 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
                     <Upload className="w-4 h-4 text-[#C5A059]" />
                     <input
                       type="file"
-                      accept="video/mp4,video/webm,video/ogg,video/quicktime"
+                      accept="video/mp4,video/webm"
                       className="hidden"
                       onChange={handleVideoFileUpload}
+                      disabled={isUploadingVideo}
                     />
-                    <span>رفع فيديو من جهازك</span>
+                    <span>{isUploadingVideo ? 'جارٍ رفع الفيديو...' : 'رفع فيديو من جهازك'}</span>
                   </label>
                   <button
                     type="button"
                     onClick={() => {
                       updateBrandVideoUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
                       setVideoError(false);
-                      notify('تمت استعادة الفيديو الإرشادي الافتراضي وتشغيله بنجاح!', 'success');
+                      notify('تم تعيين الفيديو الإرشادي الافتراضي في المسودة. احفظ المسودة وانشرها لتظهر للزوار.', 'success');
                     }}
                     className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/15 border border-white/15 text-white/80 hover:text-white font-semibold text-xs transition-all cursor-pointer flex items-center gap-1.5"
                   >
@@ -499,17 +496,18 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
                     <Upload className="w-10 h-10 text-[#C5A059] mb-3 animate-bounce" />
                     <h4 className="text-sm font-bold text-white mb-1">اختر ملف فيديو قصير من جهازك</h4>
                     <p className="text-xs text-white/60 mb-4 max-w-sm">
-                      يدعم صيغ MP4, WebM, QuickTime (MOV). سيتم تشغيل الفيديو بتكرار مستمر في الإطار الزجاجي.
+                      يدعم MP4 وWebM حتى 50 ميجابايت. حوّل MOV إلى MP4 قبل الرفع؛ ثم احفظ المسودة وانشرها ليراها الزوار.
                     </p>
                     <label className="px-5 py-2.5 rounded-xl bg-[#C5A059] hover:bg-[#d6b46b] text-black font-bold text-xs shadow-lg transition-all cursor-pointer">
                       <input
                         type="file"
                         ref={fileInputRef}
-                        accept="video/mp4,video/webm,video/ogg,video/quicktime"
+                        accept="video/mp4,video/webm"
                         className="hidden"
                         onChange={handleVideoFileUpload}
+                        disabled={isUploadingVideo}
                       />
-                      <span>تصفح ملفات الفيديو</span>
+                      <span>{isUploadingVideo ? 'جارٍ رفع الفيديو...' : 'تصفح ملفات الفيديو'}</span>
                     </label>
                   </div>
                 </div>

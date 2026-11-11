@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Router } from 'express';
+import multer from 'multer';
 import request from 'supertest';
 
 import { createApp } from './app.js';
@@ -42,6 +43,15 @@ test('public content remains readable through the public API namespace', async (
   assert.deepEqual(response.body, { published: true });
 });
 
+test('browser policy permits trusted video embeds and HTTPS media without opening script sources', async () => {
+  const response = await request(makeApp()).get('/api/health');
+  const policy = response.headers['content-security-policy'] as string;
+  assert.match(policy, /frame-src[^;]*https:\/\/www\.youtube-nocookie\.com[^;]*https:\/\/player\.vimeo\.com/);
+  assert.match(policy, /media-src[^;]*https:/);
+  assert.match(policy, /connect-src 'self'/);
+  assert.doesNotMatch(policy, /script-src[^;]*'unsafe-eval'/);
+});
+
 test('rejects JSON bodies larger than 25 MiB', async () => {
   const response = await request(makeApp())
     .post('/api/auth/ping')
@@ -62,4 +72,13 @@ test('unexpected server errors never return a stack trace', async () => {
   assert.deepEqual(response.body, { error: 'INTERNAL_ERROR' });
   assert.equal(response.text.includes('stack marker'), false);
   assert.equal(response.text.includes('password=secret'), false);
+});
+
+test('oversized video receives 413 rather than an unexplained server error', async () => {
+  const oversized = Router();
+  oversized.post('/videos', (_req, _res, next) => next(new multer.MulterError('LIMIT_FILE_SIZE')));
+  const response = await request(makeApp({ adminRouter: oversized })).post('/api/admin/videos')
+    .set('Origin', 'https://almkhlafi.carpetbazar.org');
+  assert.equal(response.status, 413);
+  assert.deepEqual(response.body, { error: 'UPLOAD_TOO_LARGE' });
 });

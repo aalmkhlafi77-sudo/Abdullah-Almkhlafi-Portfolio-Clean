@@ -2,6 +2,7 @@ import path from 'node:path';
 
 import express, { type Express, type Router } from 'express';
 import helmet from 'helmet';
+import multer from 'multer';
 
 import type { DatabaseHealth } from './db.js';
 import { asyncHandler } from './http/asyncHandler.js';
@@ -23,7 +24,16 @@ export const createApp = (deps: CreateAppDependencies): Express => {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', deps.trustProxy);
-  app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    contentSecurityPolicy: {
+      directives: {
+        frameSrc: ["'self'", 'https://www.youtube-nocookie.com', 'https://www.youtube.com', 'https://player.vimeo.com'],
+        mediaSrc: ["'self'", 'https:', 'data:'],
+        connectSrc: ["'self'"],
+      },
+    },
+  }));
   app.use('/api', originGuard(deps.publicOrigin));
   app.use(express.json({ limit: '25mb' }));
 
@@ -54,6 +64,10 @@ export const createApp = (deps: CreateAppDependencies): Express => {
   });
 
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: 'UPLOAD_TOO_LARGE' });
+      return;
+    }
     if ((error as { type?: string }).type === 'entity.too.large') {
       res.status(413).json({ error: 'PAYLOAD_TOO_LARGE' });
       return;
