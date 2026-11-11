@@ -231,6 +231,7 @@ export const PublicExpertise: React.FC<PublicExpertiseProps> = ({
                     src={videoInfo.embedUrl}
                     title="فيديو تعريفي واستشاري (تكرار مستمر)"
                     className="w-full h-full object-cover border-0 pointer-events-auto"
+                    referrerPolicy="strict-origin-when-cross-origin"
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                     allowFullScreen
                   />
