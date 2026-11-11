@@ -9,12 +9,13 @@ import request from 'supertest';
 import type { PortfolioSnapshotV1 } from '../content/schema.js';
 import type { MediaRecord, MediaRepository } from './repository.js';
 import { createMediaRouter, deleteMediaAsset, isMediaReferenced } from './routes.js';
-import { detectImageType, resolveMediaPath, storeImage } from './storage.js';
+import { detectImageType, detectVideoType, resolveMediaPath, storeImage, storeVideo } from './storage.js';
 
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z7S8AAAAASUVORK5CYII=',
   'base64',
 );
+const MP4 = Buffer.from('000000186674797069736f6d0000000069736f6d6d703431', 'hex');
 
 const emptySnapshot = (): PortfolioSnapshotV1 => ({
   schemaVersion: 1,
@@ -50,6 +51,68 @@ test('stores accepted images under random names and returns a permanent media UR
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('accepts an MP4 signature and stores bytes under the persistent upload root (not a codec/playback test)', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portfolio-video-'));
+  try {
+    assert.deepEqual(await detectVideoType(MP4), { ext: 'mp4', mime: 'video/mp4' });
+    const stored = await storeVideo(MP4, root);
+    assert.match(stored.storageName, /^[a-f0-9-]{36}\.mp4$/);
+    assert.equal(stored.publicUrl, `/media/${stored.storageName}`);
+    assert.deepEqual(await readFile(stored.absolutePath), MP4);
+    await assert.rejects(() => storeVideo(Buffer.from('not a video'), root), /video|signature/i);
+    assert.deepEqual(await readdir(root), [stored.storageName]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('authenticated video upload confirms a durable URL only after storage and database registration', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portfolio-video-'));
+  const records: MediaRecord[] = [];
+  const repository: MediaRepository = {
+    async insert(record) { records.push(record); return record; },
+    async findById() { return null; },
+    async delete() {},
+  };
+  const app = express();
+  app.use((req, _res, next) => { req.admin = { id: 1, username: 'admin' }; next(); });
+  app.use(createMediaRouter({ repository, uploadRoot: root,
+    getDraft: async () => ({ snapshot: emptySnapshot() }),
+    getPublished: async () => ({ snapshot: emptySnapshot() }),
+  }));
+  try {
+    const response = await request(app).post('/videos').attach('file', MP4, 'clip.mp4');
+    assert.equal(response.status, 201);
+    assert.match(response.body.publicUrl, /^\/media\/[a-f0-9-]{36}\.mp4$/);
+    assert.equal(records[0].mimeType, 'video/mp4');
+    assert.deepEqual(await readFile(path.join(root, records[0].storageName)), MP4);
+    const invalid = await request(app).post('/videos').attach('file', PNG, 'clip.mp4');
+    assert.equal(invalid.status, 400);
+    assert.equal(records.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('video upload failure removes its staged file and does not report success', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portfolio-video-'));
+  const repository: MediaRepository = {
+    async insert() { throw new Error('database unavailable'); },
+    async findById() { return null; }, async delete() {},
+  };
+  const app = express();
+  app.use((req, _res, next) => { req.admin = { id: 1, username: 'admin' }; next(); });
+  app.use(createMediaRouter({ repository, uploadRoot: root,
+    getDraft: async () => ({ snapshot: emptySnapshot() }),
+    getPublished: async () => ({ snapshot: emptySnapshot() }),
+  }));
+  try {
+    const response = await request(app).post('/videos').attach('file', MP4, 'clip.mp4');
+    assert.equal(response.status, 500);
+    assert.deepEqual(await readdir(root), []);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('rejects manipulated media paths outside the upload root', () => {

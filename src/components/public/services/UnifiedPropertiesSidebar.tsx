@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../../context/AppContext';
+import { apiClient } from '../../../lib/apiClient';
+import { persistBrandVideoFile } from '../../../lib/videoUpload';
+import { getBrandVideoEmbedInfo } from '../../../utils/mediaUtils';
 import { ServiceItem, IntegratedSolutionItem } from '../../../types';
 import { 
   X, 
@@ -32,10 +35,40 @@ export const UnifiedPropertiesSidebar: React.FC = () => {
     openIconLibrary,
     isAuthenticated,
     brandVideoUrl,
-    updateBrandVideoUrl
+    updateBrandVideoUrl,
+    notify,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'content' | 'layout' | 'appearance' | 'typography' | 'motion' | 'advanced'>('content');
+  const [videoUrlDraft, setVideoUrlDraft] = useState(brandVideoUrl);
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+  useEffect(() => { setVideoUrlDraft(brandVideoUrl); }, [brandVideoUrl]);
+
+  const applyVideoLink = () => {
+    const url = videoUrlDraft.trim();
+    if (!getBrandVideoEmbedInfo(url).isVideo) {
+      notify('أدخل رابط YouTube أو Vimeo صالحًا، أو رابط HTTPS مباشرًا لملف MP4/WebM.', 'warning');
+      return;
+    }
+    updateBrandVideoUrl(url);
+  };
+
+  const uploadVideo = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = '';
+    if (isUploadingVideo) return;
+    if (!file.size || file.size > 50 * 1024 * 1024) {
+      notify('يجب أن يكون الفيديو صالحًا ولا يتجاوز 50 ميجابايت.', 'warning');
+      return;
+    }
+    setIsUploadingVideo(true);
+    try {
+      const stored = await persistBrandVideoFile(file, apiClient.uploadVideo, updateBrandVideoUrl,
+        (message) => notify(message, 'success'));
+      if (!stored) notify('تعذر رفع الفيديو أو لم يؤكد الخادم تخزينه. لم تتغير المسودة.', 'warning');
+    } finally { setIsUploadingVideo(false); }
+  };
 
   // Identify what kind of element is selected
   const isService = selectedLiveElementId?.startsWith('service-card-');
@@ -494,26 +527,22 @@ export const UnifiedPropertiesSidebar: React.FC = () => {
                     <div className="space-y-2">
                       <input
                         type="url"
-                        value={brandVideoUrl}
-                        onChange={e => updateBrandVideoUrl(e.target.value)}
+                        value={videoUrlDraft}
+                        onChange={e => setVideoUrlDraft(e.target.value)}
                         placeholder="https://www.youtube.com/watch?v=... أو رابط مباشر"
                         className="w-full px-3 py-2 bg-black/40 border border-white/20 rounded-xl text-white text-xs focus:border-[#C5A059] focus:outline-none"
                       />
-                      <p className="text-[11px] text-[#C5A059]">يدعم روابط يوتيوب والشورتس ومقاطع الفيديو المباشرة، ويتم تكرارها مستمراً (Loop).</p>
+                      <button type="button" onClick={applyVideoLink} className="px-3 py-2 rounded-xl bg-[#C5A059] text-black text-xs font-bold">تطبيق الرابط</button>
+                      <p className="text-[11px] text-[#C5A059]">يدعم YouTube وVimeo أو ملف فيديو مباشر عبر HTTPS. احفظ المسودة وانشرها بعد التعديل.</p>
                       <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-[#C5A059]/20 hover:bg-[#C5A059]/30 border border-[#C5A059]/40 text-[#C5A059] cursor-pointer text-xs font-semibold transition-all">
                         <input
                           type="file"
-                          accept="video/mp4,video/webm,video/ogg,video/quicktime"
+                          accept="video/mp4,video/webm"
                           className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              const url = URL.createObjectURL(file);
-                              updateBrandVideoUrl(url);
-                            }
-                          }}
+                          disabled={isUploadingVideo}
+                          onChange={uploadVideo}
                         />
-                        <span>رفع فيديو من الجهاز (MP4/MOV)</span>
+                        <span>{isUploadingVideo ? 'جارٍ رفع الفيديو...' : 'رفع فيديو من الجهاز (MP4/WebM حتى 50MB)'}</span>
                       </label>
                     </div>
                   </div>

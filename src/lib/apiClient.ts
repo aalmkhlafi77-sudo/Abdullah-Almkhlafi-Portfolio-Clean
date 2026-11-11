@@ -99,6 +99,11 @@ export const createApiClient = (
       form.append('file', file);
       return request<Record<string, unknown>>('/api/admin/media', { method: 'POST', body: form });
     },
+    uploadVideo: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return request<{ publicUrl: string; mimeType: string }>('/api/admin/videos', { method: 'POST', body: form });
+    },
     deleteMedia: (id: string) => request<void>(`/api/admin/media/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     changePassword: (currentPassword: string, newPassword: string) => request<void>('/api/auth/password', {
       method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }),

@@ -64,6 +64,7 @@ import { PublicProjects } from '../public/PublicProjects';
 import { PublicArticles } from '../public/PublicArticles';
 import { PublicQuote } from '../public/PublicQuote';
 import { PublicContact } from '../public/PublicContact';
+import { PreviewPageFrame } from './PreviewPageFrame';
 import { ProfileModal } from '../common/ProfileModal';
 import { getTitleFontSizeClass, getBodyFontSizeClass, getFontWeightClass, getMotionConfig, getGradientBackground, getScopedValue } from '../../utils/typography';
 
@@ -757,7 +758,7 @@ export const VisualPageBuilder: React.FC = () => {
       </div>
 
       {/* Main 3-Column Studio Workspace */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 min-h-0 flex overflow-hidden relative">
         
         {/* Right Column (in RTL): Pages & Layers Tree */}
         <div className={`w-72 border-l flex flex-col shrink-0 z-20 transition-colors ${
@@ -920,19 +921,12 @@ export const VisualPageBuilder: React.FC = () => {
         {/* Center Canvas: Interactive Visual Preview with Full Scroll */}
         <div 
           ref={previewScrollContainerRef}
-          className={`flex-1 overflow-y-auto scroll-smooth p-4 sm:p-6 flex flex-col items-center justify-start relative ${
+          aria-label="معاينة الصفحة القابلة للتمرير"
+          className={`flex-1 min-h-0 min-w-0 overflow-y-auto overscroll-contain scroll-smooth p-4 sm:p-6 flex flex-col items-center justify-start relative ${
             theme === 'dark' ? 'bg-[#0D0D0C]' : 'bg-[#EFEAE1]'
           }`}
         >
-          <div 
-            className={`transition-all duration-300 w-full rounded-2xl shadow-2xl overflow-hidden border relative mb-12 ${
-              theme === 'dark' ? 'bg-[#121212] border-[#2A2824]' : 'bg-white border-[#E5E0D8]'
-            }`}
-            style={{
-              maxWidth: deviceMode === 'mobile' ? '390px' : deviceMode === 'tablet' ? '768px' : '100%',
-              minHeight: '85vh'
-            }}
-          >
+          <PreviewPageFrame theme={theme} deviceMode={deviceMode}>
             {/* Elements list rendered live */}
             {(!currentPage?.elements || currentPage.elements.length === 0) ? (
               <div className="py-20 px-6 flex flex-col items-center justify-center text-center space-y-6">
@@ -1333,7 +1327,7 @@ export const VisualPageBuilder: React.FC = () => {
                 );
               })
             )}
-          </div>
+          </PreviewPageFrame>
 
           {/* Floating Glass Navigation & Scrolling Controller */}
           <div className="sticky bottom-3 z-30 flex items-center gap-1.5 p-1.5 rounded-2xl bg-[#141311]/90 text-white border border-[#2E2B26]/80 shadow-2xl backdrop-blur-md">

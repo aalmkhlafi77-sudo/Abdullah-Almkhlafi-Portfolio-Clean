@@ -4,7 +4,8 @@ import { ProjectItem, BuilderElement } from '../../types';
 import { ProjectDetailModal } from './ProjectDetailModal';
 import { MotionLeft } from '../common/MotionLeft';
 import { DirectImageEditor } from '../common/DirectImageEditor';
-import { ArrowLeft, ExternalLink, Sparkles, Eye, Layers, ChevronDown, ChevronUp, RefreshCw, Play, Video } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Eye, Layers, Play, Video } from 'lucide-react';
+import { useAutoLoadItems } from './useAutoLoadItems';
 import { getVideoEmbedInfo } from '../../utils/mediaUtils';
 import { 
   getTitleFontSizeClass, 
@@ -35,8 +36,6 @@ export const PublicProjects: React.FC<PublicProjectsProps> = ({
 
   const INITIAL_COUNT = 6;
   const LOAD_INCREMENT = 3;
-  const [visibleCount, setVisibleCount] = useState<number>(INITIAL_COUNT);
-  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
 
   const categories: string[] = ['الكل', ...Array.from(new Set<string>(projects.map(p => p.category)))];
 
@@ -44,28 +43,12 @@ export const PublicProjects: React.FC<PublicProjectsProps> = ({
     ? projects
     : projects.filter(p => p.category === selectedCategory);
 
+  const { visibleCount, sentinelRef } = useAutoLoadItems(filteredProjects.length, selectedCategory, INITIAL_COUNT, LOAD_INCREMENT);
   const visibleProjects = filteredProjects.slice(0, visibleCount);
   const hasMore = visibleCount < filteredProjects.length;
 
   const handleCategoryChange = (cat: string) => {
     setSelectedCategory(cat);
-    setVisibleCount(INITIAL_COUNT);
-  };
-
-  const handleLoadMore = () => {
-    setIsLoadingMore(true);
-    setTimeout(() => {
-      setVisibleCount(prev => prev + LOAD_INCREMENT);
-      setIsLoadingMore(false);
-    }, 300);
-  };
-
-  const handleShowLess = () => {
-    setVisibleCount(INITIAL_COUNT);
-    const projectsSection = document.getElementById('projects');
-    if (projectsSection) {
-      projectsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
   };
 
   const maxWidthClass = 
@@ -382,9 +365,9 @@ export const PublicProjects: React.FC<PublicProjectsProps> = ({
           })}
         </div>
 
-        {/* Load More & Progressive Navigation Controls */}
+        {/* Automatically reveal the next projects while scrolling, including inside the editor preview. */}
         {filteredProjects.length > INITIAL_COUNT && (
-          <MotionLeft distance={-30} delay={0.2} className="mt-14 flex flex-col items-center justify-center gap-4">
+          <div className="mt-14 flex flex-col items-center justify-center gap-4">
             {/* Progress Bar & Counter */}
             <div className="flex items-center gap-3 text-xs text-[#8E877D] dark:text-[#9E988D]">
               <span className="font-mono text-[11px]">
@@ -398,53 +381,8 @@ export const PublicProjects: React.FC<PublicProjectsProps> = ({
               </div>
             </div>
 
-            {/* Load More / Finished State Buttons */}
-            <div className="flex flex-col sm:flex-row items-center gap-3">
-              {hasMore ? (
-                <button
-                  id="load-more-projects-btn"
-                  type="button"
-                  onClick={handleLoadMore}
-                  disabled={isLoadingMore}
-                  className={`group relative inline-flex items-center gap-2.5 px-6 py-3 rounded-2xl text-xs sm:text-sm font-bold transition-all duration-300 shadow-md hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] ${
-                    theme === 'dark'
-                      ? 'bg-[#1A1917] hover:bg-[#22201D] text-[#E8D4A8] border border-[#C5A059]/40 hover:border-[#C5A059] shadow-[#C5A059]/5'
-                      : 'bg-[#FFFFFF] hover:bg-[#FAF8F5] text-[#121212] border border-[#C5A059]/50 hover:border-[#C5A059] shadow-stone-900/5'
-                  }`}
-                >
-                  {isLoadingMore ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 text-[#C5A059] animate-spin" />
-                      <span>جاري جلب المشاريع...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="p-1 rounded-lg bg-[#C5A059]/20 text-[#C5A059] group-hover:bg-[#C5A059] group-hover:text-[#121212] transition-colors">
-                        <ChevronDown className="w-4 h-4 transition-transform group-hover:translate-y-0.5" />
-                      </span>
-                      <span>تحميل المزيد من المشاريع ({filteredProjects.length - visibleCount}+)</span>
-                    </>
-                  )}
-                </button>
-              ) : (
-                <div className="flex flex-col sm:flex-row items-center gap-3">
-                  <div className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-[#C5A059]/10 border border-[#C5A059]/30 text-[#DFCA9B]">
-                    <Sparkles className="w-3.5 h-3.5 text-[#C5A059]" />
-                    <span>تم استعراض كافة المشاريع بنجاح ({filteredProjects.length})</span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleShowLess}
-                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium text-[#8E877D] hover:text-[#DFCA9B] border border-transparent hover:border-[#282622] transition-all"
-                  >
-                    <ChevronUp className="w-3.5 h-3.5" />
-                    <span>عرض أقل</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          </MotionLeft>
+            {hasMore && <div ref={sentinelRef} role="status" aria-live="polite" className="py-3 text-xs text-[#8E877D] dark:text-[#9E988D]">تظهر المشاريع التالية تلقائيًا عند التمرير</div>}
+          </div>
         )}
 
       </div>

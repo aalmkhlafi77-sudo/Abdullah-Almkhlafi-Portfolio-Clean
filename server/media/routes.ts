@@ -7,7 +7,7 @@ import multer from 'multer';
 import type { PortfolioSnapshotV1 } from '../content/schema.js';
 import { ContentNotPublishedError } from '../content/service.js';
 import type { MediaRecord, MediaRepository } from './repository.js';
-import { detectImageType, MAX_IMAGE_BYTES, removeStoredImage, resolveMediaPath, storeImage } from './storage.js';
+import { detectImageType, detectVideoType, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, removeStoredImage, resolveMediaPath, storeImage, storeVideo } from './storage.js';
 
 const containsExactString = (value: unknown, target: string): boolean => {
   if (value === target) return true;
@@ -79,6 +79,34 @@ export const createMediaRouter = (deps: MediaRouterDependencies): Router => {
     } catch {
       if (stored) await removeStoredImage(deps.uploadRoot, stored.storageName);
       res.status(500).json({ error: 'IMAGE_UPLOAD_FAILED' });
+    }
+  });
+
+  const videoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_VIDEO_BYTES, files: 1 } });
+  router.post('/videos', videoUpload.single('file'), async (req, res) => {
+    if (!req.file || !req.admin) {
+      res.status(400).json({ error: 'VIDEO_REQUIRED' });
+      return;
+    }
+    try {
+      await detectVideoType(req.file.buffer);
+    } catch {
+      res.status(400).json({ error: 'INVALID_VIDEO' });
+      return;
+    }
+    let stored: Awaited<ReturnType<typeof storeVideo>> | null = null;
+    try {
+      stored = await storeVideo(req.file.buffer, deps.uploadRoot);
+      const record: MediaRecord = {
+        id: randomUUID(), storageName: stored.storageName,
+        originalName: path.basename(req.file.originalname), mimeType: stored.mimeType,
+        sizeBytes: stored.sizeBytes, publicUrl: stored.publicUrl, createdBy: req.admin.id,
+      };
+      await deps.repository.insert(record);
+      res.status(201).json(record);
+    } catch {
+      if (stored) await removeStoredImage(deps.uploadRoot, stored.storageName);
+      res.status(500).json({ error: 'VIDEO_UPLOAD_FAILED' });
     }
   });
 
