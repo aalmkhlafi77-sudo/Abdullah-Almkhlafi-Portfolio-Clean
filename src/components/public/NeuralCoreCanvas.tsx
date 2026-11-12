@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { startVisibleCanvasAnimation } from './visibleCanvasAnimation';
 
 interface NeuralCoreCanvasProps {
   speedMultiplier?: number;
@@ -23,7 +24,6 @@ export const NeuralCoreCanvas: React.FC<NeuralCoreCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let animationFrameId: number;
     let width = (canvas.width = canvas.offsetWidth);
     let height = (canvas.height = canvas.offsetHeight);
 
@@ -482,17 +482,16 @@ export const NeuralCoreCanvas: React.FC<NeuralCoreCanvasProps> = ({
         ctx.restore();
       });
 
-      animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    const stopAnimation = startVisibleCanvasAnimation(canvas, render);
 
     return () => {
       window.removeEventListener('resize', handleResize);
       if (interactive) {
         window.removeEventListener('mousemove', handleMouseMove);
       }
-      cancelAnimationFrame(animationFrameId);
+      stopAnimation();
     };
   }, [theme, speedMultiplier, glowIntensity, interactive]);
 
