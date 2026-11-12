@@ -10,12 +10,32 @@ import type { PortfolioSnapshotV1 } from '../content/schema.js';
 import type { MediaRecord, MediaRepository } from './repository.js';
 import { createMediaRouter, deleteMediaAsset, isMediaReferenced } from './routes.js';
 import { detectImageType, detectVideoType, resolveMediaPath, storeImage, storeVideo } from './storage.js';
+import { faststartMp4 } from './mp4Faststart.js';
 
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z7S8AAAAASUVORK5CYII=',
   'base64',
 );
 const MP4 = Buffer.from('000000186674797069736f6d0000000069736f6d6d703431', 'hex');
+const atom = (name: string, payload: Buffer = Buffer.alloc(0)): Buffer => {
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(payload.length + 8, 0);
+  header.write(name, 4, 4, 'ascii');
+  return Buffer.concat([header, payload]);
+};
+
+// ftyp(24), free(8), mdat(12), moov(60); sample starts at byte 40.
+const trailingMoovMp4 = (): Buffer => {
+  const offset = Buffer.alloc(12);
+  offset.writeUInt32BE(1, 4);
+  offset.writeUInt32BE(40, 8);
+  return Buffer.concat([
+    MP4,
+    atom('free'),
+    atom('mdat', Buffer.from('12345678', 'hex')),
+    atom('moov', atom('trak', atom('mdia', atom('minf', atom('stbl', atom('stco', offset)))))),
+  ]);
+};
 
 const emptySnapshot = (): PortfolioSnapshotV1 => ({
   schemaVersion: 1,
@@ -66,6 +86,34 @@ test('accepts an MP4 signature and stores bytes under the persistent upload root
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('stores a trailing-moov MP4 with its index before video data and corrected sample offsets', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'portfolio-video-'));
+  try {
+    const stored = await storeVideo(trailingMoovMp4(), root);
+    const saved = await readFile(stored.absolutePath);
+    assert.equal(saved.length, 104);
+    assert.equal(saved.toString('ascii', 4, 8), 'ftyp');
+    assert.equal(saved.toString('ascii', 28, 32), 'moov');
+    assert.equal(saved.toString('ascii', 88, 92), 'free');
+    assert.equal(saved.toString('ascii', 96, 100), 'mdat');
+    assert.equal(saved.readUInt32BE(80), 100);
+    assert.equal(saved.readUInt32BE(100), 0x12345678);
+    assert.equal(stored.sizeBytes, saved.length);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('MP4 faststart leaves an already streamable file and malformed boxes unchanged', () => {
+  const original = trailingMoovMp4();
+  const streamable = faststartMp4(original);
+  assert.equal(faststartMp4(streamable), streamable);
+  assert.equal(original.toString('ascii', 36, 40), 'mdat');
+  const invalid = Buffer.from(original);
+  invalid.writeUInt32BE(0, 32);
+  assert.equal(faststartMp4(invalid), invalid);
 });
 
 test('authenticated video upload confirms a durable URL only after storage and database registration', async () => {
