@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
+import { startVisibleCanvasAnimation } from './visibleCanvasAnimation';
 
 interface AIForestCanvasProps {
   speedMultiplier?: number;
@@ -22,7 +23,6 @@ export const AIForestCanvas: React.FC<AIForestCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let animationFrameId: number;
     let width = (canvas.width = canvas.offsetWidth);
     let height = (canvas.height = canvas.offsetHeight);
 
@@ -394,17 +394,16 @@ export const AIForestCanvas: React.FC<AIForestCanvasProps> = ({
         ctx.restore();
       });
 
-      animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    const stopAnimation = startVisibleCanvasAnimation(canvas, render);
 
     return () => {
       window.removeEventListener('resize', handleResize);
       if (interactive) {
         window.removeEventListener('mousemove', handleMouseMove);
       }
-      cancelAnimationFrame(animationFrameId);
+      stopAnimation();
     };
   }, [theme, speedMultiplier, glowIntensity, interactive]);
 
