@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { fileTypeFromBuffer } from 'file-type';
 
+import { faststartMp4 } from './mp4Faststart.js';
 import type { DetectedImageType, StoredImage, SupportedImageExtension, SupportedImageMime } from './types.js';
 
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -67,16 +68,17 @@ export const storeImage = async (
 
 export const storeVideo = async (buffer: Buffer, uploadRoot: string) => {
   const type = await detectVideoType(buffer);
+  const savedBytes = type.ext === 'mp4' ? faststartMp4(buffer) : buffer;
   const storageName = `${randomUUID()}.${type.ext}`;
   const absolutePath = resolveMediaPath(uploadRoot, storageName);
   await mkdir(uploadRoot, { recursive: true });
-  await writeFile(absolutePath, buffer, { flag: 'wx', mode: 0o640 });
+  await writeFile(absolutePath, savedBytes, { flag: 'wx', mode: 0o640 });
   return {
     storageName,
     absolutePath,
     publicUrl: `/media/${storageName}`,
     mimeType: type.mime,
-    sizeBytes: buffer.length,
+    sizeBytes: savedBytes.length,
   };
 };
 
